@@ -1,0 +1,3 @@
+## Variable Declarations & Constants
+
+This section establishes explicit variable declaration practices with type hints for clarity and safety. It covers type-specific declarations (`declare -i`, `declare --`, `declare -a`, `declare -A`), variable scoping rules (global vs local), naming conventions (UPPER_CASE for constants, lower_case for variables), readonly patterns for constants (both individual declarations and the group pattern), boolean flag implementations using integers, and derived variable patterns where values are computed from other variables. These practices ensure predictable variable behavior and prevent common shell scripting errors.

@@ -1,0 +1,20 @@
+#!/bin/bash
+set -euo pipefail
+
+declare -- testcodefile=/tmp/testcode-"$RANDOM"
+
+clip -p "$testcodefile" || exit 22
+
+declare -a shellcheck=(
+  shellcheck
+  -C
+  -e SC2034
+  --external-sources
+  --check-sourced
+  --shell=bash
+)
+"${shellcheck[@]}" "$@" "$testcodefile" && {
+  >&2 echo "No Shellcheck Errors"
+}
+
+#fin

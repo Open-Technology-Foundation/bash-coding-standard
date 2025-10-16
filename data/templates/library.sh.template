@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# {{DESCRIPTION}}
+# This is a sourceable library script
+
+# Library metadata
+declare -x {{NAME}}_VERSION='{{VERSION}}'
+declare -x {{NAME}}_PATH
+{{NAME}}_PATH=$(realpath -- "${BASH_SOURCE[0]}")
+declare -x {{NAME}}_DIR=${{{NAME}}_PATH%/*}
+readonly -- {{NAME}}_VERSION {{NAME}}_PATH {{NAME}}_DIR
+
+# Messaging functions (library prefix)
+{{NAME}}_msg() {
+  local -- prefix="{{NAME}}:" msg
+  for msg in "$@"; do printf '%s %s\n' "$prefix" "$msg"; done
+}
+declare -fx {{NAME}}_msg
+
+{{NAME}}_error() { >&2 {{NAME}}_msg "$@"; }
+declare -fx {{NAME}}_error
+
+# Example library function
+{{NAME}}_hello() {
+  local -- name="${1:-World}"
+  echo "Hello, $name from {{NAME}} library!"
+}
+declare -fx {{NAME}}_hello
+
+# Library initialization
+{{NAME}}_init() {
+  # TODO: Add initialization logic
+  return 0
+}
+declare -fx {{NAME}}_init
+
+# Auto-initialize on source
+{{NAME}}_init
+
+#fin

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# {{DESCRIPTION}}
+set -euo pipefail
+
+error() { >&2 echo "$0: $*"; }
+die() { (($# > 1)) && error "${@:2}"; exit "${1:-0}"; }
+
+main() {
+  # TODO: Add implementation
+  echo 'Hello from {{NAME}}'
+}
+
+main "$@"
+#fin

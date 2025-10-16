@@ -1,0 +1,3 @@
+## File Operations
+
+This section establishes safe file handling practices to prevent common pitfalls in shell scripting. It covers proper file testing operators (`-e`, `-f`, `-d`, `-r`, `-w`, `-x`) with explicit quoting requirements, safe wildcard expansion patterns that always use explicit paths (`rm ./*` never `rm *`), process substitution techniques (`< <(command)`) for avoiding subshell variable issues when reading command output, and here document patterns for multi-line input. These defensive programming practices prevent accidental file deletion, handle special characters safely, and ensure reliable file operations across different environments.

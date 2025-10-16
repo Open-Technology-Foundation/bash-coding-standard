@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# {{DESCRIPTION}}
+set -euo pipefail
+shopt -s inherit_errexit shift_verbose
+
+# Script metadata
+VERSION='{{VERSION}}'
+SCRIPT_PATH=$(realpath -- "$0")
+SCRIPT_DIR=${SCRIPT_PATH%/*}
+SCRIPT_NAME=${SCRIPT_PATH##*/}
+readonly -- VERSION SCRIPT_PATH SCRIPT_DIR SCRIPT_NAME
+
+# Global variables
+declare -i VERBOSE=1
+declare -i DEBUG=0
+
+# Colors
+[[ -t 1 && -t 2 ]] && declare -- GREEN=$'\033[0;32m' YELLOW=$'\033[0;33m' RED=$'\033[0;31m' NC=$'\033[0m' || declare -- GREEN='' YELLOW='' RED='' NC=''
+readonly -- GREEN YELLOW RED NC
+
+# Messaging functions
+_msg() {
+  local -- prefix="$SCRIPT_NAME:" msg
+  [[ "${FUNCNAME[1]}" == success ]] && prefix+=" ${GREEN}✓${NC}"
+  [[ "${FUNCNAME[1]}" == warn ]] && prefix+=" ${YELLOW}⚠${NC}"
+  [[ "${FUNCNAME[1]}" == error ]] && prefix+=" ${RED}✗${NC}"
+  for msg in "$@"; do printf '%s %s\n' "$prefix" "$msg"; done
+}
+
+vecho() { ((VERBOSE)) || return 0; >&2 _msg "$@"; }
+success() { ((VERBOSE)) || return 0; >&2 _msg "$@"; }
+warn() { >&2 _msg "$@"; }
+info() { >&2 _msg "$@"; }
+debug() { ((DEBUG)) || return 0; >&2 _msg "$@"; }
+error() { >&2 _msg "$@"; }
+die() { (($# > 1)) && error "${@:2}"; exit "${1:-0}"; }
+
+yn() {
+  local -- prompt="${1:-Continue?}"
+  local -- response
+  while true; do
+    read -r -p "$prompt [y/n] " response
+    case "$response" in
+      [Yy]*) return 0 ;;
+      [Nn]*) return 1 ;;
+      *) echo "Please answer y or n." ;;
+    esac
+  done
+}
+
+show_help() {
+  cat <<EOF
+Usage: $SCRIPT_NAME [OPTIONS]
+
+{{DESCRIPTION}}
+
+Options:
+  -h, --help              Show this help message
+  -V, --version           Show version information
+  -v, --verbose           Enable verbose output (default)
+  -q, --quiet             Disable verbose output
+  -d, --debug             Enable debug output
+
+Examples:
+  $SCRIPT_NAME
+
+EOF
+}
+
+parse_args() {
+  while (($#)); do
+    case "$1" in
+      -h|--help)
+        show_help
+        exit 0
+        ;;
+      -V|--version)
+        echo "$SCRIPT_NAME $VERSION"
+        exit 0
+        ;;
+      -v|--verbose)
+        VERBOSE=1
+        shift
+        ;;
+      -q|--quiet)
+        VERBOSE=0
+        shift
+        ;;
+      -d|--debug)
+        DEBUG=1
+        shift
+        ;;
+      -*)
+        die 2 "Unknown option: $1" "Try '$SCRIPT_NAME --help' for usage information"
+        ;;
+      *)
+        die 2 "Unexpected argument: $1" "Try '$SCRIPT_NAME --help' for usage information"
+        ;;
+    esac
+  done
+}
+
+main() {
+  parse_args "$@"
+
+  # TODO: Add implementation
+  info 'Hello from {{NAME}}'
+  success 'Script completed successfully'
+}
+
+main "$@"
+#fin

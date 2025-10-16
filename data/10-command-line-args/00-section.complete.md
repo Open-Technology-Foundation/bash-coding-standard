@@ -1,0 +1,3 @@
+## Command-Line Arguments
+
+This section establishes the standard argument parsing pattern that supports both short options (`-h`, `-v`) and long options (`--help`, `--version`), ensuring consistent command-line interfaces across all scripts. It defines the canonical version output format (`scriptname X.Y.Z`), explains validation patterns for checking required arguments and detecting option conflicts, and provides guidance on where to place argument parsing logic (main function vs top-level) based on script complexity. These patterns make scripts predictable, user-friendly, and maintainable while supporting both interactive and automated usage.

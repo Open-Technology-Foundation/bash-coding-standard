@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# {{DESCRIPTION}}
+set -euo pipefail
+shopt -s inherit_errexit shift_verbose
+
+# Script metadata
+VERSION='{{VERSION}}'
+SCRIPT_PATH=$(realpath -- "$0")
+SCRIPT_DIR=${SCRIPT_PATH%/*}
+SCRIPT_NAME=${SCRIPT_PATH##*/}
+readonly -- VERSION SCRIPT_PATH SCRIPT_DIR SCRIPT_NAME
+
+# Messaging functions
+_msg() {
+  local -- prefix="$SCRIPT_NAME:" msg
+  for msg in "$@"; do printf '%s %s\n' "$prefix" "$msg"; done
+}
+error() { >&2 _msg "$@"; }
+die() { (($# > 1)) && error "${@:2}"; exit "${1:-0}"; }
+
+main() {
+  # TODO: Add implementation
+  echo 'Hello from {{NAME}}'
+}
+
+main "$@"
+#fin

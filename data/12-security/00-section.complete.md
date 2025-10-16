@@ -1,0 +1,3 @@
+## Security Considerations
+
+This critical section establishes security-first practices for production bash scripts, covering five essential areas. It mandates never using SUID/SGID permissions on bash scripts due to inherent security risks, requires locking down PATH or explicitly validating it to prevent command hijacking, explains IFS (Internal Field Separator) safety to avoid word-splitting vulnerabilities, strongly discourages `eval` usage due to injection risks (requiring explicit justification when unavoidable), and details input sanitization patterns for validating and cleaning user input early. These practices prevent privilege escalation, command injection, path traversal, and other common attack vectors in shell scripts.
