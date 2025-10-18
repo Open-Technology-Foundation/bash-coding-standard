@@ -1,4 +1,4 @@
-### Arrays for Safe List Handling
+## Arrays for Safe List Handling
 
 **Use arrays to store lists of elements safely, especially for command arguments, file lists, and any collection where elements may contain spaces, special characters, or wildcards. Arrays provide proper element boundaries and eliminate word splitting and glob expansion issues that plague string-based lists.**
 

@@ -44,9 +44,9 @@ test_generate_stdout_abstract() {
   # Should produce abstract markdown
   assert_contains "$output" "# Bash Coding Standard" "Abstract output contains title"
 
-  # Abstract version should be shorter
+  # Abstract version should be shorter than complete
   local -i complete_lines abstract_lines
-  complete_lines=$("$SCRIPT" generate 2>&1 | wc -l)
+  complete_lines=$("$SCRIPT" generate -t complete 2>&1 | wc -l)
   abstract_lines=$("$SCRIPT" generate -t abstract 2>&1 | wc -l)
 
   if ((abstract_lines < complete_lines)); then
@@ -67,7 +67,7 @@ test_generate_stdout_summary() {
 
   # Summary should be between abstract and complete
   local -i complete_lines summary_lines abstract_lines
-  complete_lines=$("$SCRIPT" generate 2>&1 | wc -l)
+  complete_lines=$("$SCRIPT" generate -t complete 2>&1 | wc -l)
   summary_lines=$("$SCRIPT" generate -t summary 2>&1 | wc -l)
   abstract_lines=$("$SCRIPT" generate -t abstract 2>&1 | wc -l)
 
@@ -108,18 +108,7 @@ test_generate_invalid_tier() {
   output=$("$SCRIPT" generate -t invalid 2>&1) || true
 
   # Should produce error message
-  assert_contains "$output" "error" "Invalid tier produces error"
-}
-
-test_generate_alias() {
-  test_section "Generate Alias Tests"
-
-  # Test regen alias
-  local -- output1 output2
-  output1=$("$SCRIPT" generate 2>&1 | head -10 || true)
-  output2=$("$SCRIPT" regen 2>&1 | head -10 || true)
-
-  assert_equals "$output1" "$output2" "generate and regen produce same output"
+  assert_contains "$output" "✗" "Invalid tier produces error"
 }
 
 # Run all tests
@@ -129,7 +118,6 @@ test_generate_stdout_abstract
 test_generate_stdout_summary
 test_generate_output_file
 test_generate_invalid_tier
-test_generate_alias
 
 print_summary
 

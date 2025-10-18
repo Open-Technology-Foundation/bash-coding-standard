@@ -1,4 +1,4 @@
-### Echo vs Messaging Functions
+## Echo vs Messaging Functions
 
 **Choose between plain `echo` and messaging functions based on the context, formatting requirements, and output destination. Use messaging functions for operational status updates that respect verbosity settings, and plain `echo` for data output and structured documentation that must always display.**
 

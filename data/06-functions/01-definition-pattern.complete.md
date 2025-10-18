@@ -1,4 +1,4 @@
-### Function Definition Pattern
+## Function Definition Pattern
 \`\`\`bash
 # Single-line functions for simple operations
 vecho() { ((VERBOSE)) || return 0; _msg "$@"; }

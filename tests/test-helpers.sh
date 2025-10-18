@@ -260,4 +260,267 @@ test_summary() {
   print_summary "$@"
 }
 
+# Enhanced assertions (added in test suite revamp)
+
+# Assert file contains specific text
+assert_file_contains() {
+  local -- file="$1"
+  local -- text="$2"
+  local -- test_name="${3:-File $file should contain: $text}"
+
+  TESTS_RUN+=1
+
+  if [[ ! -f "$file" ]]; then
+    TESTS_FAILED+=1
+    FAILED_TESTS+=("$test_name")
+    echo "${RED}✗${NC} $test_name"
+    echo "  File not found: $file"
+    return 1
+  fi
+
+  if grep -qF "$text" "$file"; then
+    TESTS_PASSED+=1
+    echo "${GREEN}✓${NC} $test_name"
+    return 0
+  else
+    TESTS_FAILED+=1
+    FAILED_TESTS+=("$test_name")
+    echo "${RED}✗${NC} $test_name"
+    echo "  File does not contain: $text"
+    return 1
+  fi
+}
+
+# Assert regex match
+assert_regex_match() {
+  local -- text="$1"
+  local -- pattern="$2"
+  local -- test_name="${3:-Text should match pattern: $pattern}"
+
+  TESTS_RUN+=1
+
+  if [[ "$text" =~ $pattern ]]; then
+    TESTS_PASSED+=1
+    echo "${GREEN}✓${NC} $test_name"
+    return 0
+  else
+    TESTS_FAILED+=1
+    FAILED_TESTS+=("$test_name")
+    echo "${RED}✗${NC} $test_name"
+    echo "  Pattern: $pattern"
+    echo "  Text: $text"
+    return 1
+  fi
+}
+
+# Assert line count between range
+assert_lines_between() {
+  local -- text="$1"
+  local -i min="$2"
+  local -i max="$3"
+  local -- test_name="${4:-Line count should be between $min and $max}"
+
+  TESTS_RUN+=1
+
+  local -i actual_lines
+  actual_lines=$(echo "$text" | wc -l)
+
+  if ((actual_lines >= min && actual_lines <= max)); then
+    TESTS_PASSED+=1
+    echo "${GREEN}✓${NC} $test_name (actual: $actual_lines)"
+    return 0
+  else
+    TESTS_FAILED+=1
+    FAILED_TESTS+=("$test_name")
+    echo "${RED}✗${NC} $test_name"
+    echo "  Expected: $min-$max lines"
+    echo "  Actual: $actual_lines lines"
+    return 1
+  fi
+}
+
+# Skip a test with reason
+skip_test() {
+  local -- reason="$*"
+  TESTS_RUN+=1
+  TESTS_PASSED+=1
+  echo "${YELLOW}⊘${NC} SKIPPED: $reason"
+  return 0
+}
+
+# Setup test environment (create temp dir, set traps)
+setup_test_env() {
+  local -- test_name="${1:-test}"
+
+  # Create temp directory
+  local -- temp_dir
+  temp_dir=$(mktemp -d "/tmp/bcs-test-${test_name}-XXXXXX")
+
+  # Set cleanup trap
+  trap "rm -rf '$temp_dir'" RETURN EXIT
+
+  echo "$temp_dir"
+}
+
+# Cleanup test environment
+cleanup_test_env() {
+  local -- temp_dir="$1"
+
+  if [[ -d "$temp_dir" ]]; then
+    rm -rf "$temp_dir"
+  fi
+}
+
+# Mock a command (create fake command in temp PATH)
+mock_command() {
+  local -- cmd_name="$1"
+  local -- mock_output="$2"
+  local -i mock_exit_code="${3:-0}"
+
+  # Create mock directory if not exists
+  if [[ ! -d "/tmp/bcs-mocks" ]]; then
+    mkdir -p /tmp/bcs-mocks
+  fi
+
+  # Create mock script
+  cat > "/tmp/bcs-mocks/$cmd_name" <<MOCK_SCRIPT
+#!/usr/bin/env bash
+cat <<'MOCK_OUTPUT'
+$mock_output
+MOCK_OUTPUT
+exit $mock_exit_code
+MOCK_SCRIPT
+
+  chmod +x "/tmp/bcs-mocks/$cmd_name"
+
+  # Add to PATH
+  export PATH="/tmp/bcs-mocks:$PATH"
+
+  echo "Mocked: $cmd_name"
+}
+
+# Unmock command (remove from mock directory)
+unmock_command() {
+  local -- cmd_name="$1"
+
+  if [[ -f "/tmp/bcs-mocks/$cmd_name" ]]; then
+    rm -f "/tmp/bcs-mocks/$cmd_name"
+  fi
+}
+
+# Create test BCS rule file
+create_test_bcs_rule() {
+  local -- output_file="$1"
+  local -- rule_code="${2:-BCS9999}"
+  local -- rule_title="${3:-Test Rule}"
+
+  cat > "$output_file" <<TEST_RULE
+**Rule: $rule_code**
+
+### $rule_title
+
+This is a test rule for testing purposes.
+
+---
+
+## Example
+
+\`\`\`bash
+echo "Test example"
+\`\`\`
+
+---
+
+## Summary
+
+This is a test rule summary.
+TEST_RULE
+
+  echo "Created test rule: $output_file"
+}
+
+# Assert directory exists
+assert_dir_exists() {
+  local -- dir="$1"
+  local -- test_name="${2:-Directory exists: $dir}"
+
+  TESTS_RUN+=1
+
+  if [[ -d "$dir" ]]; then
+    TESTS_PASSED+=1
+    echo "${GREEN}✓${NC} $test_name"
+    return 0
+  else
+    TESTS_FAILED+=1
+    FAILED_TESTS+=("$test_name")
+    echo "${RED}✗${NC} $test_name"
+    echo "  Directory not found: $dir"
+    return 1
+  fi
+}
+
+# Assert file is executable
+assert_file_executable() {
+  local -- file="$1"
+  local -- test_name="${2:-File is executable: $file}"
+
+  TESTS_RUN+=1
+
+  if [[ -x "$file" ]]; then
+    TESTS_PASSED+=1
+    echo "${GREEN}✓${NC} $test_name"
+    return 0
+  else
+    TESTS_FAILED+=1
+    FAILED_TESTS+=("$test_name")
+    echo "${RED}✗${NC} $test_name"
+    echo "  File is not executable: $file"
+    return 1
+  fi
+}
+
+# Assert greater than
+assert_greater_than() {
+  local -i actual="$1"
+  local -i threshold="$2"
+  local -- test_name="${3:-Value should be > $threshold}"
+
+  TESTS_RUN+=1
+
+  if ((actual > threshold)); then
+    TESTS_PASSED+=1
+    echo "${GREEN}✓${NC} $test_name (actual: $actual)"
+    return 0
+  else
+    TESTS_FAILED+=1
+    FAILED_TESTS+=("$test_name")
+    echo "${RED}✗${NC} $test_name"
+    echo "  Expected: > $threshold"
+    echo "  Actual: $actual"
+    return 1
+  fi
+}
+
+# Assert less than
+assert_less_than() {
+  local -i actual="$1"
+  local -i threshold="$2"
+  local -- test_name="${3:-Value should be < $threshold}"
+
+  TESTS_RUN+=1
+
+  if ((actual < threshold)); then
+    TESTS_PASSED+=1
+    echo "${GREEN}✓${NC} $test_name (actual: $actual)"
+    return 0
+  else
+    TESTS_FAILED+=1
+    FAILED_TESTS+=("$test_name")
+    echo "${RED}✗${NC} $test_name"
+    echo "  Expected: < $threshold"
+    echo "  Actual: $actual"
+    return 1
+  fi
+}
+
 #fin

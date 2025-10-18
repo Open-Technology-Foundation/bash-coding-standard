@@ -112,7 +112,6 @@ test_sections_basic_output
 test_sections_count
 test_sections_content
 test_sections_numbering
-test_sections_alias
 test_sections_exit_code
 
 print_summary

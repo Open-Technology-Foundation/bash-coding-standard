@@ -1,4 +1,4 @@
-### PATH Security
+## PATH Security
 
 **Always secure the PATH variable to prevent command substitution attacks and trojan binary injection. An insecure PATH is one of the most common attack vectors in shell scripts.**
 

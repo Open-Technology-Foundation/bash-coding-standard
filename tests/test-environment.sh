@@ -90,7 +90,7 @@ test_file_not_found() {
 
   # Should either show error or find file via FHS paths
   if ((exit_code != 0)); then
-    assert_contains "$output" "error" "Script reports error when file not in local directory"
+    assert_contains "$output" "✗" "Script reports error when file not in local directory"
   else
     # Script found file via FHS search paths (expected in installed systems)
     pass "Script found file via FHS search paths (system is installed)"
@@ -175,7 +175,7 @@ test_error_output_to_stderr() {
   # Test that errors go to stderr
   local -- stderr
   stderr=$("$SCRIPT" invalid-arg 2>&1 >/dev/null) || true
-  assert_contains "$stderr" "error:" "Errors are sent to stderr"
+  assert_contains "$stderr" "bcs: ✗" "Errors are sent to stderr"
 
   # Test that help goes to stdout
   local -- stdout

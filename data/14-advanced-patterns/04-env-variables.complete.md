@@ -1,4 +1,4 @@
-### Environment Variable Best Practices
+## Environment Variable Best Practices
 
 Proper handling of environment variables.
 

@@ -119,7 +119,7 @@ test_search_missing_pattern() {
 
   # Should produce error when no pattern specified
   assert_not_zero "$exit_code" "Missing pattern returns error"
-  assert_contains "$output" "error" "Error message when pattern missing"
+  assert_contains "$output" "✗" "Error message when pattern missing"
 }
 
 # Run all tests
@@ -130,7 +130,6 @@ test_search_with_context
 test_search_no_matches
 test_search_multiword
 test_search_regex_pattern
-test_search_alias
 test_search_missing_pattern
 
 print_summary

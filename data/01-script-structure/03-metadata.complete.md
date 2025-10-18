@@ -1,4 +1,4 @@
-### Script Metadata
+## Script Metadata
 
 **Every script must declare standard metadata variables (VERSION, SCRIPT_PATH, SCRIPT_DIR, SCRIPT_NAME) immediately after `shopt` settings and before any other code. Make these readonly as a group.**
 

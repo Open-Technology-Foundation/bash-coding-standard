@@ -1,4 +1,4 @@
-### Function Export
+## Function Export
 \`\`\`bash
 # Export functions when needed by subshells
 grep() { /usr/bin/grep "$@"; }

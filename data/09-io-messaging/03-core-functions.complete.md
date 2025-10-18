@@ -1,4 +1,4 @@
-### Core Message Functions
+## Core Message Functions
 
 **Every script should implement a standard set of messaging functions that provide consistent, colored, contextual output. Use a private `_msg()` core function that detects the calling function via `FUNCNAME` to automatically format messages appropriately.**
 

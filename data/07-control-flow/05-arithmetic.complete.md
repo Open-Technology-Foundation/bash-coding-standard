@@ -1,4 +1,4 @@
-### Arithmetic Operations
+## Arithmetic Operations
 
 **Declare integer variables explicitly:**
 

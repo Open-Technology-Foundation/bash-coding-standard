@@ -1,4 +1,4 @@
-### Main Function
+## Main Function
 
 **Always include a `main()` function for scripts longer than approximately 40 lines. The main function serves as the single entry point, orchestrating the script's logic and making the code more organized, testable, and maintainable. Place `main "$@"` at the bottom of the script, just before the `#fin` marker.**
 

@@ -1,4 +1,4 @@
-### Logging Best Practices
+## Logging Best Practices
 
 Structured logging for production scripts (simplified pattern).
 

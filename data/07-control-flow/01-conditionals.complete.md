@@ -1,4 +1,4 @@
-### Conditionals
+## Conditionals
 
 **Use `[[ ]]` for string/file tests, `(())` for arithmetic:**
 

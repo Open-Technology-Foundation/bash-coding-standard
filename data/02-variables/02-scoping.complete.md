@@ -1,4 +1,4 @@
-### Variable Scoping
+## Variable Scoping
 Always declare function-specific variables as `local` to prevent namespace pollution and unexpected side effects.
 
 ```bash

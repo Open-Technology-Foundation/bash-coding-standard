@@ -1,4 +1,4 @@
-### Progressive State Management
+## Progressive State Management
 
 Manage script state by modifying boolean flags based on runtime conditions, separating decision logic from execution.
 

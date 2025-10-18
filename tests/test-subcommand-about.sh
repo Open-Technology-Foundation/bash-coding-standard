@@ -161,17 +161,6 @@ test_about_verbose() {
   fi
 }
 
-test_about_alias() {
-  test_section "About Alias Tests"
-
-  # Test info alias
-  local -- output1 output2
-  output1=$("$SCRIPT" about 2>&1)
-  output2=$("$SCRIPT" info 2>&1)
-
-  assert_equals "$output1" "$output2" "about and info produce same output"
-}
-
 test_about_exit_code() {
   test_section "About Exit Code Tests"
 
@@ -194,7 +183,6 @@ test_about_links
 test_about_quote
 test_about_json
 test_about_verbose
-test_about_alias
 test_about_exit_code
 
 print_summary

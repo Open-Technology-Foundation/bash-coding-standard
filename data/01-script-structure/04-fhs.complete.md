@@ -1,4 +1,4 @@
-### Filesystem Hierarchy Standard (FHS) Preference
+## Filesystem Hierarchy Standard (FHS) Preference
 
 **When designing scripts that install files or search for resources, follow the Filesystem Hierarchy Standard (FHS) where practical. FHS compliance enables predictable file locations, supports both system and user installations, and integrates smoothly with package managers.**
 

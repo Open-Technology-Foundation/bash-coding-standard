@@ -1,4 +1,4 @@
-### Mixed Quoting
+## Mixed Quoting
 
 When a string contains both static text and variables, use double quotes with single quotes nested for literal protection:
 

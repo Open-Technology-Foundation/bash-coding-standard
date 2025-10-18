@@ -1,4 +1,4 @@
-### Input Sanitization
+## Input Sanitization
 
 **Always validate and sanitize user input to prevent security issues.**
 

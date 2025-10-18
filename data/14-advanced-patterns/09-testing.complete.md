@@ -1,4 +1,4 @@
-### Testing Support Patterns
+## Testing Support Patterns
 
 Patterns for making scripts testable.
 

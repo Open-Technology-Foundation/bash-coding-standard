@@ -26,3 +26,5 @@ NOTE: Do not over-engineer scripts; functions and variables not required for the
 12. [Security Considerations](#security-considerations)
 13. [Code Style & Best Practices](#code-style--best-practices)
 14. [Advanced Patterns](#advanced-patterns)
+
+BSC00

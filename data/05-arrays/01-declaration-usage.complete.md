@@ -1,4 +1,4 @@
-### Array Declaration and Usage
+## Array Declaration and Usage
 
 **Declaring arrays:**
 

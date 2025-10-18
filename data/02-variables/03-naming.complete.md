@@ -1,4 +1,4 @@
-### Naming Conventions
+## Naming Conventions
 
 Follow these naming conventions to maintain consistency and avoid conflicts with shell built-ins.
 

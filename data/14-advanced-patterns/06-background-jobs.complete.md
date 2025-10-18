@@ -1,4 +1,4 @@
-### Background Job Management
+## Background Job Management
 
 Managing background processes and jobs.
 

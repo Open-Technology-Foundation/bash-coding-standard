@@ -1,4 +1,4 @@
-### Standardized Messaging and Color Support
+## Standardized Messaging and Color Support
 \`\`\`bash
 # Message function flags
 declare -i VERBOSE=1 PROMPT=1 DEBUG=0

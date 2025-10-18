@@ -1,3 +1,3 @@
-## Functions
+# Functions
 
 This section defines function definition patterns, naming conventions (lowercase_with_underscores), and organization principles. It mandates the `main()` function for scripts exceeding 40 lines to improve structure and testability, explains function export for sourceable libraries (`declare -fx`), and details production optimization practices where unused utility functions should be removed once scripts mature. Functions should be organized bottom-up: messaging functions first, then helpers, then business logic, with `main()` last—this ensures each function can safely call previously defined functions and readers understand primitives before composition.

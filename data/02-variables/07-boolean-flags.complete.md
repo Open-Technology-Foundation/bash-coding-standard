@@ -1,4 +1,4 @@
-### Boolean Flags Pattern
+## Boolean Flags Pattern
 
 For boolean state tracking, use integer variables with `declare -i`:
 

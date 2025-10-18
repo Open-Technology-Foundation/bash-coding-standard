@@ -1,4 +1,4 @@
-### Echo and Printf Statements
+## Echo and Printf Statements
 
 \`\`\`bash
 # Static strings - single quotes

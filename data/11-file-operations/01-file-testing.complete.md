@@ -1,4 +1,4 @@
-### Safe File Testing
+## Safe File Testing
 
 **Always quote variables and use `[[ ]]` for file tests:**
 

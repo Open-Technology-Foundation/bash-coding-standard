@@ -4,19 +4,24 @@
 
 # BCS Metadata
 [[ -v BCS_VERSION ]] || {
+  declare -x VERSION='1.0.0'
   declare -x BCS_VERSION='1.0.0'
-  declare -x BCS_PATH=$(realpath -- "${BASH_SOURCE[0]}")
-  declare -x BCS_DIR=${BCS_PATH%/*}
-  declare -x BCS_NAME=${BCS_PATH##*/}
-  readonly -- BCS_VERSION BCS_PATH BCS_DIR BCS_NAME
+  declare -x BCS_PATH BCS_DIR BCS_NAME
+  BCS_PATH=$(realpath -- "${BASH_SOURCE[0]}")
+  BCS_DIR=${BCS_PATH%/*}
+  BCS_NAME=${BCS_PATH##*/}
+  readonly -- VERSION BCS_VERSION BCS_PATH BCS_DIR BCS_NAME
 }
 
 # Logging/Messaging system
 declare -i VERBOSE=1
-if [[ -t 1 && -t 2 ]]; then
-  declare -- RED=$'\033[0;31m' GREEN=$'\033[0;32m' YELLOW=$'\033[0;33m' CYAN=$'\033[0;36m' NC=$'\033[0m'
-else
-  declare -- RED='' GREEN='' YELLOW='' CYAN='' NC=''
+# Only declare color variables if not already set (avoids conflicts when sourced after test-helpers.sh)
+if [[ ! -v RED ]]; then
+  if [[ -t 1 && -t 2 ]]; then
+    declare -- RED=$'\033[0;31m' GREEN=$'\033[0;32m' YELLOW=$'\033[0;33m' CYAN=$'\033[0;36m' NC=$'\033[0m'
+  else
+    declare -- RED='' GREEN='' YELLOW='' CYAN='' NC=''
+  fi
 fi
 # _Core messaging function using FUNCNAME
 _msg() {
@@ -72,12 +77,46 @@ source trim >/dev/null || {
   declare -fx trim
 }
 
+# Sanitize text to URL/identifier-safe slugs
+# Uses post_slug utility if available, falls back to basic sanitization
+# See: https://github.com/Open-Technology-Foundation/post_slug
+source post_slug.bash >/dev/null 2>&1 || {
+  post_slug() {
+    # Fallback implementation when post_slug not installed
+    # Args: text [separator] [min_len] [max_len]
+    local -- text="$1" separator="${2:--}" min_len="${3:-1}" max_len="${4:-255}"
+
+    # Basic sanitization: lowercase, replace non-alphanumeric with separator
+    text=$(echo "$text" | tr '[:upper:]' '[:lower:]' | tr -c '[:alnum:]' "$separator")
+    # Remove leading/trailing separators
+    text="${text#"${separator}"}"
+    text="${text%"${separator}"}"
+    # Collapse multiple separators
+    while [[ "$text" =~ ${separator}${separator} ]]; do
+      text="${text//${separator}${separator}/${separator}}"
+    done
+
+    # Apply length constraints
+    local -i len=${#text}
+    if ((len < min_len)); then
+      echo "slug_${text}_$(date +%s)" | head -c "$max_len"
+    elif ((len > max_len)); then
+      echo "${text:0:$max_len}"
+    else
+      echo "$text"
+    fi
+  }
+  declare -fx post_slug
+}
+
 
 # Find BASH-CODING-STANDARD.md in standard locations
 find_bcs_file() {
   local -- script_dir="$1"
+  local -- install_share="${script_dir%/bin}/share/yatti/bash-coding-standard"
   local -a search_paths=(
     "$script_dir"                                 # Same directory (development)
+    "$install_share"                              # Relative to script (custom PREFIX)
     '/usr/local/share/yatti/bash-coding-standard' # YaTTI local install
     '/usr/share/yatti/bash-coding-standard'       # YaTTI system install
   )
@@ -89,6 +128,24 @@ find_bcs_file() {
   return 1
 }
 declare -fx find_bcs_file
+
+# Find data/ directory in standard locations
+find_data_dir() {
+  local -- install_share="${BCS_DIR%/bin}/share/yatti/bash-coding-standard/data"
+  local -a search_paths=(
+    "$BCS_DIR/data"                                     # Same directory (development)
+    "$install_share"                                    # Relative to script (custom PREFIX)
+    '/usr/local/share/yatti/bash-coding-standard/data' # YaTTI local install
+    '/usr/share/yatti/bash-coding-standard/data'       # YaTTI system install
+  )
+  local -- path
+  for path in "${search_paths[@]}"; do
+    [[ -d "$path" ]] && { echo "$path"; return 0; }
+  done
+
+  return 1
+}
+declare -fx find_data_dir
 
 # Extract BCS code from rule file path
 # BCS rule code format: BCS{catNo}[{ruleNo}][{subruleNo}]
@@ -111,10 +168,53 @@ get_bcs_code() {
 }
 declare -fx get_bcs_code
 
+# Get default tier by reading BASH-CODING-STANDARD.md symlink
+# Returns: complete, abstract, or summary
+# Falls back to 'abstract' if symlink doesn't exist or can't be read
+get_default_tier() {
+  # Find BASH-CODING-STANDARD.md using FHS-compliant search
+  local -- bcs_file
+  bcs_file=$(find_bcs_file "$BCS_DIR") || {
+    echo 'abstract'
+    return 0
+  }
+
+  # Check if it's a symlink
+  [[ -L "$bcs_file" ]] || {
+    echo 'abstract'
+    return 0
+  }
+
+  # Read symlink target
+  local -- target
+  target=$(readlink "$bcs_file") || {
+    echo 'abstract'
+    return 0
+  }
+
+  # Extract tier from filename (e.g., "complete" from "BASH-CODING-STANDARD.complete.md")
+  if [[ "$target" =~ \.complete\.md$ ]]; then
+    echo 'complete'
+  elif [[ "$target" =~ \.summary\.md$ ]]; then
+    echo 'summary'
+  elif [[ "$target" =~ \.abstract\.md$ ]]; then
+    echo 'abstract'
+  else
+    # Fallback
+    echo 'abstract'
+  fi
+
+  return 0
+}
+declare -fx get_default_tier
+
 # Rebuild BCS/ directory structure and create BCS code symlinks
 rebuild_bcs_index() {
-  local -- bcs_index_dir="$BCS_DIR/BCS"
-  local -- data_dir="$BCS_DIR/data"
+  local -- data_dir
+  data_dir=$(find_data_dir) || { error 'Data directory not found'; return 1; }
+
+  # BCS index directory is parallel to data/ directory
+  local -- bcs_index_dir="${data_dir%/data}/BCS"
 
   # Validate directories exist
   [[ -d "$data_dir" ]] || { error "Data directory not found '$data_dir'"; return 1; }
@@ -235,6 +335,778 @@ rebuild_bcs_index() {
 }
 declare -fx rebuild_bcs_index
 
+# ============================================================================
+# Compression Helper Functions (Developer Mode)
+# ============================================================================
+
+# Validate Claude CLI availability and capabilities
+compress_validate_claude_cli() {
+  local -- claude_cmd="${1:-claude}"
+
+  command -v "$claude_cmd" >/dev/null 2>&1 || {
+    error "Claude CLI not found: $claude_cmd"
+    info 'Install from: https://claude.ai/code'
+    return 1
+  }
+
+  # Test Claude with required flags
+  if ! "$claude_cmd" --help 2>&1 | grep -q 'dangerously-skip-permissions'; then
+    error "Claude CLI does not support --dangerously-skip-permissions flag"
+    info 'Update Claude CLI to latest version'
+    return 1
+  fi
+
+  success "Claude CLI validated: $claude_cmd"
+  return 0
+}
+declare -fx compress_validate_claude_cli
+
+# Build system prompt for summary tier compression
+compress_build_system_prompt_summary() {
+  cat <<'PROMPT'
+You are a technical documentation compressor specializing in Bash Coding Standard rules.
+
+TASK: The user will provide a source .complete.md file path and an output file path in their prompt. Use the Read tool to read the source file, compress it to .summary.md format, then use the Write tool to write the compressed result to the output file path.
+
+TARGET SIZE: Maximum 10,000 bytes (strict limit)
+
+CRITICAL REQUIREMENTS (NON-NEGOTIABLE):
+1. NEVER alter, simplify, or change code examples - preserve EXACT syntax
+2. NEVER lose unique technical details - accuracy is paramount
+3. Consolidate rationale points - merge duplicates, eliminate redundancy, keep unique technical insights only
+4. Keep 3-5 most critical anti-patterns with examples (deduplicate overlapping ones)
+5. Keep 2-3 most important edge cases (merge similar cases)
+6. Preserve all code blocks completely (but remove redundant examples showing same pattern)
+7. Maintain technical precision in all statements
+
+DEDUPLICATION REQUIREMENTS:
+- Identify and merge duplicate explanations of the same concept
+- If a concept is explained multiple times, consolidate into single clearest statement
+- Remove redundant examples that demonstrate the same principle
+- Merge overlapping anti-patterns into comprehensive single examples
+- One clear statement of each concept beats three redundant variations
+
+COMPRESSION APPROACH:
+- Reorganize content to group related concepts and eliminate duplication
+- Reword verbose statements for brevity while preserving technical precision
+- Remove verbose explanations while keeping technical facts
+- Consolidate similar examples - if pattern X appears in 3 examples, show best one
+- Keep measurable/specific details (performance numbers, specific errors)
+- Remove obvious elaborations and redundant explanations
+- Maintain structure: title, rationale, examples, anti-patterns, edge cases
+
+CRITICAL FILE WRITING:
+- Use the Write tool to write ONLY the compressed markdown content to the output file
+- NO meta-commentary about the compression process in the file
+- NO "Summary" sections explaining what you did in the file
+- NO lists of "Key achievements" or "Compression techniques used" in the file
+- The file content will be directly concatenated into the final document
+- Think of the file content as the final published content, not a report about compression
+- The file should start immediately with the rule title/content (markdown format)
+
+OUTPUT: Use Write tool to create valid markdown file following .summary.md structure, under 10,000 bytes.
+PROMPT
+}
+declare -fx compress_build_system_prompt_summary
+
+# Build system prompt for abstract tier compression
+compress_build_system_prompt_abstract() {
+  local -- bcs_code="$1"
+  cat <<PROMPT
+You are a technical documentation compressor specializing in Bash Coding Standard rules.
+
+TASK: The user will provide a source .complete.md file path and an output file path in their prompt. Use the Read tool to read the source file, compress it to .abstract.md format (ultra-concise), then use the Write tool to write the compressed result to the output file path.
+
+TARGET SIZE: Maximum 1,500 bytes (ultra-compressed, strict limit)
+
+CRITICAL REQUIREMENTS (NON-NEGOTIABLE):
+1. NEVER alter code examples - preserve EXACT syntax (but use minimal examples)
+2. Keep only THE MOST critical technical details
+3. Top 2-3 rationale points (most measurable/technical)
+4. One minimal but ACCURATE code example (5-8 lines max)
+5. 1-2 most critical anti-patterns only
+6. Add reference line as LAST LINE: "**Ref:** $bcs_code" (file must end with single newline, no extra blank lines)
+7. Extreme brevity - every word must add unique value
+
+COMPRESSION APPROACH:
+- One-sentence rule statement in bold
+- Inline anti-patterns using \`→\` notation where possible
+- Remove all elaboration - state fact, move on
+- Keep only information that changes behavior or prevents catastrophic errors
+- Use minimal examples showing core pattern only
+
+CRITICAL FILE WRITING:
+- Use the Write tool to write ONLY the compressed markdown content to the output file
+- NO meta-commentary about the compression process in the file
+- NO "Summary" sections explaining what you did in the file
+- NO lists of "Key achievements" or "Compression techniques used" in the file
+- The file content will be directly concatenated into the final document
+- Think of the file content as the final published content, not a report about compression
+- The file should start immediately with the rule title/content (markdown format)
+- File MUST end with "**Ref:** BCS####" line followed by exactly one newline character
+
+OUTPUT: Use Write tool to create ultra-concise markdown file following .abstract.md structure, under 1,500 bytes.
+PROMPT
+}
+declare -fx compress_build_system_prompt_abstract
+
+# Build strict system prompt for abstract tier compression (retry)
+compress_build_system_prompt_abstract_strict() {
+  local -i current_size=$1
+  local -- bcs_code="$2"
+  cat <<PROMPT
+You are a technical documentation compressor specializing in Bash Coding Standard rules.
+
+TASK: The user will provide a source .complete.md file path and an output file path in their prompt. Use the Read tool to read the source file, compress it to .abstract.md format (ultra-concise), then use the Write tool to write the compressed result to the output file path.
+
+TARGET SIZE: Maximum 1,500 bytes (STRICT - previous attempt was $current_size bytes)
+
+CRITICAL REQUIREMENTS (NON-NEGOTIABLE):
+1. NEVER alter code examples - preserve EXACT syntax
+2. RUTHLESSLY remove all non-essential text
+3. ONE rationale point only (most critical)
+4. ONE minimal code example (3-5 lines max)
+5. ONE anti-pattern maximum
+6. Add reference line as LAST LINE: "**Ref:** $bcs_code" (file must end with single newline, no extra blank lines)
+7. Ultra-extreme brevity - remove all elaboration
+
+COMPRESSION APPROACH:
+- Single sentence rule in bold
+- Inline examples using backticks where possible instead of code blocks
+- Remove all explanatory text
+- Keep ONLY information that prevents critical errors
+- Abbreviate aggressively
+
+CRITICAL FILE WRITING:
+- Use the Write tool to write ONLY the compressed markdown content to the output file
+- NO meta-commentary about the compression process in the file
+- NO "Summary" sections explaining what you did in the file
+- NO lists of "Key achievements" or "Compression techniques used" in the file
+- The file content will be directly concatenated into the final document
+- Think of the file content as the final published content, not a report about compression
+- The file should start immediately with the rule title/content (markdown format)
+- File MUST end with "**Ref:** BCS####" line followed by exactly one newline character
+
+OUTPUT: Use Write tool to create ultra-minimal markdown file, MUST be under 1,500 bytes.
+PROMPT
+}
+declare -fx compress_build_system_prompt_abstract_strict
+
+# Build strict system prompt for summary tier compression (retry)
+compress_build_system_prompt_summary_strict() {
+  local -i current_size=$1
+  cat <<PROMPT
+You are a technical documentation compressor specializing in Bash Coding Standard rules.
+
+TASK: The user will provide a source .complete.md file path and an output file path in their prompt. Use the Read tool to read the source file, compress it to .summary.md format (balanced version), then use the Write tool to write the compressed result to the output file path.
+
+TARGET SIZE: Maximum 10,000 bytes (STRICT - previous attempt was $current_size bytes)
+
+CRITICAL REQUIREMENTS (NON-NEGOTIABLE):
+1. NEVER alter code examples - preserve EXACT syntax
+2. Aggressively merge and deduplicate rationale - eliminate ALL redundancy, keep 2-3 unique key points only
+3. Keep 2-3 most critical anti-patterns only (merge overlapping ones ruthlessly)
+4. Keep 1-2 most important edge cases (merge similar cases)
+5. Preserve code blocks but remove ALL verbose explanations and redundant examples
+6. Remove all redundant elaboration - every sentence must add unique value
+
+DEDUPLICATION (AGGRESSIVE):
+- Ruthlessly identify duplicate concepts and merge them into single statements
+- Reorganize to eliminate ALL redundant explanations
+- One clear statement of each concept - absolutely no repetition
+- If same pattern shown in multiple examples, keep only the clearest one
+- Merge overlapping rationale points into comprehensive single points
+
+COMPRESSION APPROACH:
+- Remove ALL verbose explanations and elaboration
+- Consolidate similar examples ruthlessly (keep syntax exact)
+- Cut non-essential edge cases and redundant demonstrations
+- Remove obvious statements and redundant descriptions
+- Reorganize content to group related concepts tightly
+- Reword for maximum brevity while maintaining precision
+- Keep structure but minimize all prose to bare essentials
+
+CRITICAL FILE WRITING:
+- Use the Write tool to write ONLY the compressed markdown content to the output file
+- NO meta-commentary about the compression process in the file
+- NO "Summary" sections explaining what you did in the file
+- NO lists of "Key achievements" or "Compression techniques used" in the file
+- The file content will be directly concatenated into the final document
+- Think of the file content as the final published content, not a report about compression
+- The file should start immediately with the rule title/content (markdown format)
+
+OUTPUT: Use Write tool to create concise markdown file following .summary.md structure, MUST be under 10,000 bytes.
+PROMPT
+}
+declare -fx compress_build_system_prompt_summary_strict
+
+# Check if all three tier files have matching timestamps
+compress_check_timestamps_match() {
+  local -- complete_file=$1
+  local -- summary_file=$2
+  local -- abstract_file=$3
+
+  # All three files must exist
+  [[ -f "$complete_file" && -f "$summary_file" && -f "$abstract_file" ]] || return 1
+
+  # Get modification times
+  local -- complete_mtime summary_mtime abstract_mtime
+  complete_mtime=$(stat -c '%Y' "$complete_file" 2>/dev/null) || return 1
+  summary_mtime=$(stat -c '%Y' "$summary_file" 2>/dev/null) || return 1
+  abstract_mtime=$(stat -c '%Y' "$abstract_file" 2>/dev/null) || return 1
+
+  # Check if all three timestamps match
+  [[ "$complete_mtime" == "$summary_mtime" && "$summary_mtime" == "$abstract_mtime" ]]
+}
+declare -fx compress_check_timestamps_match
+
+# Compress a single rule from .complete.md to specified tier
+compress_rule_to_tier() {
+  local -- complete_file="$1"
+  local -- tier="$2"
+  local -- claude_cmd="$3"
+  local -i dry_run="${4:-0}"
+  local -i compress_verbose="${5:-1}"
+  local -i target_size="${6:-1500}"  # Default for abstract
+  local -- context_level="${7:-none}"  # Context level: none, toc, abstract, summary, complete
+  local -i max_retries=3
+
+  # Extract base name: /path/01-layout.complete.md → 01-layout
+  local -- basename=${complete_file##*/}
+  basename=${basename%.complete.md}
+
+  # Generate target filename
+  local -- target_dir=${complete_file%/*}
+  local -- target_file="$target_dir/$basename.$tier.md"
+
+  # Calculate BCS code for this file
+  local -- bcs_code
+  bcs_code=$(get_bcs_code "$complete_file") || bcs_code='BCS????'
+
+  ((compress_verbose)) && vecho "  → Generating .$tier.md (BCS: $bcs_code)..."
+
+  # Delete existing file if in regenerate mode (already handled by caller)
+
+  if ((dry_run)); then
+    ((compress_verbose)) && info "  [DRY-RUN] Would generate: $target_file"
+    return 0
+  fi
+
+  # Build context append-prompt based on context_level (once, before retry loop)
+  local -- append_prompt=""
+  case "$context_level" in
+    abstract)
+      ((compress_verbose)) && vecho "    Using abstract context for cross-reference"
+      append_prompt=$(build_context_abstract) || {
+        ((compress_verbose)) && warn "    Failed to build abstract context, continuing without it"
+        append_prompt=""
+      }
+      ;;
+    summary)
+      ((compress_verbose)) && vecho "    Using summary context for cross-reference"
+      append_prompt=$(build_context_summary) || {
+        ((compress_verbose)) && warn "    Failed to build summary context, continuing without it"
+        append_prompt=""
+      }
+      ;;
+    complete)
+      ((compress_verbose)) && vecho "    Using complete context for cross-reference"
+      append_prompt=$(build_context_complete) || {
+        ((compress_verbose)) && warn "    Failed to build complete context, continuing without it"
+        append_prompt=""
+      }
+      ;;
+    toc)
+      ((compress_verbose)) && vecho "    Using TOC context for structure awareness"
+      append_prompt=$(build_context_toc) || {
+        ((compress_verbose)) && warn "    Failed to build TOC context, continuing without it"
+        append_prompt=""
+      }
+      ;;
+    none|"")
+      append_prompt=""
+      ;;
+    *)
+      ((compress_verbose)) && warn "    Unknown context level '$context_level', using none"
+      append_prompt=""
+      ;;
+  esac
+
+  # Retry loop for oversized files
+  local -i attempt=1
+  local -i file_size=0
+  local -- temp_file system_prompt
+
+  while ((attempt <= max_retries)); do
+    # Build system prompt based on tier and attempt
+    if ((attempt == 1)); then
+      # First attempt - standard prompt
+      if [[ "$tier" == 'summary' ]]; then
+        system_prompt=$(compress_build_system_prompt_summary)
+      else
+        system_prompt=$(compress_build_system_prompt_abstract "$bcs_code")
+      fi
+    else
+      # Retry with stricter prompt
+      if [[ "$tier" == 'summary' ]]; then
+        system_prompt=$(compress_build_system_prompt_summary_strict "$file_size")
+      else
+        system_prompt=$(compress_build_system_prompt_abstract_strict "$file_size" "$bcs_code")
+      fi
+      ((compress_verbose)) && warn "  ↻ Retry attempt $attempt with stricter compression..."
+    fi
+
+    # Create temporary file for atomic write
+    temp_file=$(mktemp) || { error 'Failed to create temporary file'; return 1; }
+
+    # Invoke Claude with file paths as prompt (Read/Write tools enabled)
+    # If context is provided, write it to a temp file to avoid ARG_MAX limit
+    local -i claude_exit=0
+    local -- context_file=""
+
+    if [[ -n "$append_prompt" ]]; then
+      # Write large context to temp file instead of passing as command-line argument
+      context_file=$(mktemp) || { error 'Failed to create context temp file'; rm -f "$temp_file"; return 1; }
+      printf '%s\n' "$append_prompt" > "$context_file" || {
+        error 'Failed to write context file'
+        rm -f "$temp_file" "$context_file"
+        return 1
+      }
+
+      # Tell Claude to read context file first, then process the target file
+      "$claude_cmd" --print --dangerously-skip-permissions \
+         --allowedTools "Read" "Write" \
+         --system-prompt "$system_prompt" \
+         "Read context: $context_file | Read source: $complete_file | Write compressed to: $temp_file" \
+         2>&1 | tee /dev/stderr || claude_exit=$?
+
+      # Clean up context file
+      rm -f "$context_file"
+    else
+      "$claude_cmd" --print --dangerously-skip-permissions \
+         --allowedTools "Read" "Write" \
+         --system-prompt "$system_prompt" \
+         "Read file: $complete_file | Write compressed output to: $temp_file" \
+         2>&1 | tee /dev/stderr || claude_exit=$?
+    fi
+
+    # Check if Claude invocation succeeded
+    if ((claude_exit == 0)); then
+      # Check if temp file was actually written to (size > 0)
+      if [[ ! -s "$temp_file" ]]; then
+        ((compress_verbose)) && warn "  ⚠ Claude succeeded but wrote empty file (possible API error)"
+        rm -f "$temp_file"
+        sleep $((2 ** attempt))  # Exponential backoff: 2, 4, 8 seconds
+        attempt+=1
+        continue
+      fi
+
+      # Check file size
+      file_size=$(wc -c < "$temp_file")
+
+      # Check if size is acceptable
+      if ((file_size <= target_size)); then
+        # Success - move temp file to target
+        mv "$temp_file" "$target_file" || { error "Failed to write: $target_file"; return 1; }
+
+        # Copy permissions, ownership, and timestamp from source .complete.md file
+        # Use explicit values as fallback if --reference fails
+        if ! chmod --reference="$complete_file" "$target_file" 2>/dev/null; then
+          # Fallback: get permissions explicitly and apply them
+          local -- perms
+          perms=$(stat -c '%a' "$complete_file" 2>/dev/null) && chmod "$perms" "$target_file" 2>/dev/null || {
+            # Final fallback: use safe default 644
+            chmod 664 "$target_file" 2>/dev/null || true
+          }
+        fi
+
+        # Try to copy ownership (may fail without root, that's OK)
+        chown --reference="$complete_file" "$target_file" 2>/dev/null || true
+
+        # Sync timestamp - use explicit method as fallback
+        if ! touch -r "$complete_file" "$target_file" 2>/dev/null; then
+          # Fallback: get timestamp explicitly and apply it
+          local -- timestamp
+          timestamp=$(stat -c '%Y' "$complete_file" 2>/dev/null) && touch -d "@$timestamp" "$target_file" 2>/dev/null || {
+            ((compress_verbose)) && warn "  Failed to sync timestamp for: $target_file"
+          }
+        fi
+
+        ((compress_verbose)) && success "  ✓ Generated ($file_size bytes): $target_file"
+        return 0  # Success
+      else
+        # Oversized - retry or give up
+        if ((attempt < max_retries)); then
+          ((compress_verbose)) && warn "  ⚠ OVERSIZED ($file_size bytes > $target_size) - retrying..."
+          rm -f "$temp_file"
+          attempt+=1
+        else
+          # Max retries reached - keep the oversized file
+          mv "$temp_file" "$target_file" || { error "Failed to write: $target_file"; return 1; }
+
+          # Copy permissions with fallback
+          if ! chmod --reference="$complete_file" "$target_file" 2>/dev/null; then
+            local -- perms
+            perms=$(stat -c '%a' "$complete_file" 2>/dev/null) && chmod "$perms" "$target_file" 2>/dev/null || {
+              chmod 664 "$target_file" 2>/dev/null || true
+            }
+          fi
+
+          # Try to copy ownership
+          chown --reference="$complete_file" "$target_file" 2>/dev/null || true
+
+          # Sync timestamp with fallback
+          if ! touch -r "$complete_file" "$target_file" 2>/dev/null; then
+            local -- timestamp
+            timestamp=$(stat -c '%Y' "$complete_file" 2>/dev/null) && touch -d "@$timestamp" "$target_file" 2>/dev/null || {
+              ((compress_verbose)) && warn "  Failed to sync timestamp for: $target_file"
+            }
+          fi
+
+          ((compress_verbose)) && warn "  ⚠ OVERSIZED ($file_size bytes > $target_size): $target_file"
+          return 2  # Oversized
+        fi
+      fi
+    else
+      # Claude invocation failed - check if it's a connection error (retry) or other error
+      [[ -f "$temp_file" ]] && rm -f "$temp_file"
+
+      # Check if it's an API connection error (transient, should retry)
+      if ((claude_exit == 1)); then
+        if ((attempt < max_retries)); then
+          ((compress_verbose)) && warn "  ↻ API connection error, retrying in $((2 ** attempt)) seconds (attempt $attempt/$max_retries)..."
+          sleep $((2 ** attempt))  # Exponential backoff: 2, 4, 8 seconds
+          attempt+=1
+          continue
+        fi
+      fi
+
+      # Not a retryable error or out of retries
+      error "  ✗ FAILED: Claude invocation failed for $target_file (exit code: $claude_exit)"
+      return 1  # Failed
+    fi
+  done
+
+  # Should not reach here (all retries exhausted)
+  return 1
+}
+declare -fx compress_rule_to_tier
+
+# Process a single .complete.md file
+compress_process_complete_file() {
+  local -- complete_file="$1"
+  local -- data_dir="$2"
+  local -- tier="$3"
+  local -- claude_cmd="$4"
+  local -i dry_run="${5:-0}"
+  local -i compress_verbose="${6:-1}"
+  local -i regenerate="${7:-0}"
+  local -i summary_limit="${8:-10000}"
+  local -i abstract_limit="${9:-1500}"
+  local -- context_level="${10:-none}"  # Context level parameter
+
+  local -- relative_path=${complete_file#"$data_dir/"}
+
+  # Extract base name for derived files
+  local -- basename=${complete_file##*/}
+  basename=${basename%.complete.md}
+  local -- target_dir=${complete_file%/*}
+  local -- summary_file="$target_dir/$basename.summary.md"
+  local -- abstract_file="$target_dir/$basename.abstract.md"
+
+  # Check if all three files have matching timestamps (indicating they're in sync)
+  if ((regenerate)) && compress_check_timestamps_match "$complete_file" "$summary_file" "$abstract_file"; then
+    ((compress_verbose)) && vecho "⊙ SKIP (timestamps match): $relative_path"
+    return 0
+  fi
+
+  ((compress_verbose)) && info "Processing: $relative_path"
+
+  # Process summary tier
+  if [[ -z "$tier" || "$tier" == 'summary' ]]; then
+    compress_rule_to_tier "$complete_file" 'summary' "$claude_cmd" "$dry_run" "$compress_verbose" "$summary_limit" "$context_level"
+  fi
+
+  # Process abstract tier
+  if [[ -z "$tier" || "$tier" == 'abstract' ]]; then
+    compress_rule_to_tier "$complete_file" 'abstract' "$claude_cmd" "$dry_run" "$compress_verbose" "$abstract_limit" "$context_level"
+  fi
+}
+declare -fx compress_process_complete_file
+
+# Process all .complete.md files in data directory
+compress_process_all_rules() {
+  local -- data_dir="$1"
+  local -- tier="$2"
+  local -- claude_cmd="$3"
+  local -i dry_run="${4:-0}"
+  local -i compress_verbose="${5:-1}"
+  local -i summary_limit="${6:-10000}"
+  local -i abstract_limit="${7:-1500}"
+  local -- context_level="${8:-none}"  # Context level parameter
+  local -i regenerate=1  # Always regenerate when called
+
+  # Find all complete files
+  local -a complete_files=()
+  readarray -t complete_files < <(find "$data_dir" -type f -name '[0-9][0-9]-*.complete.md' | sort)
+
+  local -i file_count=${#complete_files[@]}
+
+  if ((file_count == 0)); then
+    ((compress_verbose)) && warn 'No .complete.md files found'
+    return 0
+  fi
+
+  ((compress_verbose)) && info "Found $file_count .complete.md files"
+  ((compress_verbose)) && >&2 echo
+
+  # Process each file
+  local -- file
+  for file in "${complete_files[@]}"; do
+    compress_process_complete_file "$file" "$data_dir" "$tier" "$claude_cmd" \
+      "$dry_run" "$compress_verbose" "$regenerate" "$summary_limit" "$abstract_limit" "$context_level"
+  done
+}
+declare -fx compress_process_all_rules
+
+# Show compression statistics (placeholder - actual stats tracked in cmd_compress)
+compress_show_statistics() {
+  local -i total_processed="${1:-0}"
+  local -i summary_success="${2:-0}"
+  local -i summary_oversized="${3:-0}"
+  local -i summary_failed="${4:-0}"
+  local -i abstract_success="${5:-0}"
+  local -i abstract_oversized="${6:-0}"
+  local -i abstract_failed="${7:-0}"
+
+  cat <<EOF
+
+${BOLD}Compression Statistics${NC}
+$(printf '=%.0s' {1..50})
+
+Files processed: $total_processed complete → compressed
+
+Summary files (.summary.md):
+  ${GREEN}✓${NC} Within limit: $summary_success
+  ${YELLOW}⚠${NC} Oversized:    $summary_oversized
+  ${RED}✗${NC} Failed:       $summary_failed
+
+Abstract files (.abstract.md):
+  ${GREEN}✓${NC} Within limit: $abstract_success
+  ${YELLOW}⚠${NC} Oversized:    $abstract_oversized
+  ${RED}✗${NC} Failed:       $abstract_failed
+
+EOF
+
+  if ((summary_oversized + abstract_oversized > 0)); then
+    warn 'Some files exceeded size limits - manual compression recommended'
+  fi
+
+  if ((summary_failed + abstract_failed > 0)); then
+    error 'Some files failed to generate - check Claude CLI configuration'
+  fi
+}
+declare -fx compress_show_statistics
+
+# Report oversized files in data directory
+compress_report_oversized_files() {
+  local -- data_dir="$1"
+  local -i complete_limit="${2:-20000}"
+  local -i summary_limit="${3:-10000}"
+  local -i abstract_limit="${4:-1500}"
+
+  # Create associative array with limits
+  local -A data_size_limit=(
+    [complete]=$complete_limit
+    [summary]=$summary_limit
+    [abstract]=$abstract_limit
+  )
+
+  cd "$data_dir" || { error "Cannot access data directory: $data_dir"; return 2; }
+
+  local -- type
+  for type in complete summary abstract; do
+    local -a files=()
+    readarray -t files < <(find "$data_dir" -type f -name "*.${type}.md")
+    echo "$type: ${#files[@]}"
+    echo "Over ${data_size_limit[$type]} bytes:"
+    find "$data_dir" -type f -name "*.${type}.md" -exec du -b {} + | \
+      awk -v limit="${data_size_limit[$type]}" '$1 > limit {printf "    %6d bytes  %s\n", $1, $2}' | \
+      sort -rn | \
+      sed "s:$data_dir/::"
+    echo '---'
+  done
+
+  echo
+  echo "$BCS_NAME: Target: Reduce all files to ~600-1200 bytes for total ~75KB"
+  echo "$BCS_NAME: Strategy: Keep 1 example, 1 anti-pattern, brief principle, ref line"
+}
+declare -fx compress_report_oversized_files
+
+# Build context prompt with full abstract standard
+build_context_abstract() {
+  local -- abstract_file="$BCS_DIR/BASH-CODING-STANDARD.abstract.md"
+
+  # Check if abstract file exists
+  if [[ ! -f "$abstract_file" ]]; then
+    warn "Abstract standard not found: $abstract_file"
+    return 1
+  fi
+
+  cat <<'CONTEXT'
+=== CONTEXT: Full BCS Abstract Standard for Cross-Reference ===
+
+Below is the complete BASH-CODING-STANDARD in abstract form. Use this to:
+
+1. **Identify concepts already explained in other rules** - avoid duplicating explanations
+2. **Maintain consistent terminology** across all rules (use same terms for same concepts)
+3. **Reference related rules** where appropriate (e.g., "see BCS0205 for readonly pattern")
+4. **Understand overall structure** - see how your rule fits into the bigger picture
+5. **Deduplicate aggressively** - if concept X is explained in BCS01, don't re-explain in BCS08
+
+CRITICAL: Use this context to eliminate cross-rule duplication. If a concept is already
+clearly explained in another rule, reference it instead of repeating the explanation.
+
+================================================================================
+
+CONTEXT
+  cat "$abstract_file"
+  cat <<'END_CONTEXT'
+
+================================================================================
+
+=== END CONTEXT ===
+
+Now compress the target rule file with full awareness of the above context.
+END_CONTEXT
+}
+declare -fx build_context_abstract
+
+# Build context prompt with table of contents only
+build_context_toc() {
+  local -- data_dir
+  data_dir=$(find_data_dir) || return 1
+
+  cat <<'TOC_HEADER'
+=== CONTEXT: BCS Structure Overview ===
+
+The Bash Coding Standard consists of 14 sections. Use this overview to:
+1. Understand where concepts are covered
+2. Avoid duplicating content from other sections
+3. Reference related sections appropriately
+
+Section Overview:
+
+TOC_HEADER
+
+  # Generate TOC from directory structure
+  local -a section_dirs=()
+  readarray -t section_dirs < <(find "$data_dir" -maxdepth 1 -type d -name '[0-9][0-9]-*' | sort)
+
+  local -- dir section_num section_name
+  for dir in "${section_dirs[@]}"; do
+    section_num=$(basename "$dir" | grep -o '^[0-9][0-9]')
+    section_name=$(basename "$dir" | sed 's/^[0-9][0-9]-//' | tr '-' ' ' | sed 's/\b\(.\)/\u\1/g')
+
+    # Read first few lines of section file to get description
+    local -- section_file="$dir/00-section.abstract.md"
+    if [[ -f "$section_file" ]]; then
+      local -- description
+      description=$(head -n 5 "$section_file" | grep -v '^#' | grep -v '^$' | head -n 1 | sed 's/^\*\*//;s/\*\*$//')
+      printf '%s. %s - %s\n' "$section_num" "$section_name" "$description"
+    else
+      printf '%s. %s\n' "$section_num" "$section_name"
+    fi
+  done
+
+  cat <<'TOC_FOOTER'
+
+Use this structure to avoid duplicating content between sections.
+If a concept is primarily covered in another section, reference it instead of repeating.
+
+=== END CONTEXT ===
+TOC_FOOTER
+}
+declare -fx build_context_toc
+
+# Build context prompt with full summary standard
+build_context_summary() {
+  local -- summary_file="$BCS_DIR/BASH-CODING-STANDARD.summary.md"
+
+  # Check if summary file exists
+  if [[ ! -f "$summary_file" ]]; then
+    warn "Summary standard not found: $summary_file"
+    return 1
+  fi
+
+  cat <<'CONTEXT'
+=== CONTEXT: Full BCS Summary Standard for Cross-Reference ===
+
+Below is the complete BASH-CODING-STANDARD in summary form. Use this to:
+
+1. **Identify concepts already explained in other rules** - avoid duplicating explanations
+2. **Maintain consistent terminology** across all rules (use same terms for same concepts)
+3. **Reference related rules** where appropriate (e.g., "see BCS0205 for readonly pattern")
+4. **Understand overall structure** - see how your rule fits into the bigger picture
+5. **Deduplicate aggressively** - if concept X is explained in BCS01, don't re-explain in BCS08
+
+CRITICAL: Use this context to eliminate cross-rule duplication. If a concept is already
+clearly explained in another rule, reference it instead of repeating the explanation.
+
+================================================================================
+
+CONTEXT
+  cat "$summary_file"
+  cat <<'END_CONTEXT'
+
+================================================================================
+
+=== END CONTEXT ===
+
+Now compress the target rule file with full awareness of the above context.
+END_CONTEXT
+}
+declare -fx build_context_summary
+
+# Build context prompt with full complete standard
+build_context_complete() {
+  local -- complete_file="$BCS_DIR/BASH-CODING-STANDARD.complete.md"
+
+  # Check if complete file exists
+  if [[ ! -f "$complete_file" ]]; then
+    warn "Complete standard not found: $complete_file"
+    return 1
+  fi
+
+  cat <<'CONTEXT'
+=== CONTEXT: Full BCS Complete Standard for Cross-Reference ===
+
+Below is the complete BASH-CODING-STANDARD in its full form. Use this to:
+
+1. **Identify concepts already explained in other rules** - avoid duplicating explanations
+2. **Maintain consistent terminology** across all rules (use same terms for same concepts)
+3. **Reference related rules** where appropriate (e.g., "see BCS0205 for readonly pattern")
+4. **Understand overall structure** - see how your rule fits into the bigger picture
+5. **Deduplicate aggressively** - if concept X is explained in BCS01, don't re-explain in BCS08
+
+CRITICAL: Use this context to eliminate cross-rule duplication. If a concept is already
+clearly explained in another rule, reference it instead of repeating the explanation.
+
+================================================================================
+
+CONTEXT
+  cat "$complete_file"
+  cat <<'END_CONTEXT'
+
+================================================================================
+
+=== END CONTEXT ===
+
+Now compress the target rule file with full awareness of the above context.
+END_CONTEXT
+}
+declare -fx build_context_complete
+
 # List all BCS codes with titles
 cmd_codes() {
   # Handle --help
@@ -259,11 +1131,8 @@ EOF
   fi
 
   # Find data directory
-  local -- data_dir="$BCS_DIR/data"
-  if [[ ! -d "$data_dir" ]]; then
-    error "Data directory not found '$data_dir'"
-    return 1
-  fi
+  local -- data_dir
+  data_dir=$(find_data_dir) || { error 'Data directory not found'; return 1; }
 
   # Find all abstract.md files and process them
   local -a files=()
@@ -297,11 +1166,62 @@ EOF
 }
 declare -fx cmd_codes
 
+# Helper function to fix header level based on file depth
+# Args: filepath data_dir
+fix_header_level() {
+  local -- filepath="$1"
+  local -- data_dir="$2"
+  local -- relative_path="${filepath#$data_dir/}"
+  local -i slash_count depth
+  local -- first_line header_text header_marker
+
+  # Count directory separators to determine depth
+  slash_count=$(grep -o '/' <<<"$relative_path" | wc -l)
+
+  # Special case: 00-section files are depth 1 (section)
+  if [[ $(basename "$filepath") =~ ^00-section\. ]]; then
+    depth=1
+  else
+    # Depth 0: files directly in data/ (should not happen)
+    # Depth 1: files in data/##-section/ (rules)
+    # Depth 2+: files in data/##-section/##-rule/ (subrules)
+    case $slash_count in
+      0) depth=1 ;;  # Shouldn't happen, treat as section
+      1) depth=2 ;;  # Rule level
+      *) depth=3 ;;  # Subrule level
+    esac
+  fi
+
+  # Get correct header marker
+  case $depth in
+    1) header_marker='#' ;;
+    2) header_marker='##' ;;
+    *) header_marker='###' ;;
+  esac
+
+  # Read first line
+  first_line=$(head -n 1 "$filepath")
+
+  # Check if first line is a header
+  if [[ "$first_line" =~ ^#+[[:space:]] ]]; then
+    # Extract header text (strip existing # markers)
+    header_text=$(sed -E 's/^#+[[:space:]]*//' <<<"$first_line")
+    # Output corrected header
+    echo "$header_marker $header_text"
+    # Output rest of file
+    tail -n +2 "$filepath"
+  else
+    # First line is not a header, output file as-is
+    cat "$filepath"
+  fi
+}
+
 # Regenerate BASH-CODING-STANDARD.md from data/ tree
 cmd_generate() {
   # Parse arguments
   local -- output_file=''
-  local -- file_type='abstract'
+  local -- file_type
+  file_type=$(get_default_tier)  # Use symlink to determine default tier
   local -i use_stdout=1  # Default to stdout for safety
   local -i use_canonical=0
   local -i force_regenerate=0
@@ -379,7 +1299,8 @@ EOF
     # Force regeneration if requested
     if ((force_regenerate)); then
       local -- compress_script="$BCS_DIR"/utils/compress-rule/compress-all.sh
-      local -- data_dir="$BCS_DIR"/data
+      local -- data_dir
+      data_dir=$(find_data_dir) || { error 'Data directory not found'; return 1; }
 
       if [[ ! -f "$compress_script" ]]; then
         error "Compression script not found '$compress_script'" \
@@ -415,16 +1336,20 @@ EOF
 
     info 'Generating all three tiers for canonical files...'
 
+    # Determine output directory (same location as data/)
+    local -- data_dir
+    data_dir=$(find_data_dir) || { error 'Data directory not found'; return 1; }
+    local -- output_dir="${data_dir%/data}"
+
     # Generate complete tier
     file_type='complete'
-    output_file="$BCS_DIR/BASH-CODING-STANDARD.complete.md"
+    output_file="$output_dir/BASH-CODING-STANDARD.complete.md"
 
     # Find and validate files
     local -- suffix='.complete.md'
-    local -- data_dir="$BCS_DIR/data"
     local -a md_files=()
 
-    readarray -t md_files < <(find "$data_dir" -name "[0-9][0-9]-*$suffix" -type f ! -name "00-*" | sort)
+    readarray -t md_files < <(find "$data_dir" -name "*$suffix" -type f ! -name "README.md" | sort)
 
     if ((${#md_files[@]} == 0)); then
       error "No complete files found in '$data_dir'"
@@ -434,7 +1359,7 @@ EOF
     info "Generating complete standard from ${#md_files[@]} files..."
 
     {
-      local -- file bcs_code
+      local -- file bcs_code basename_file
       local -i first_iteration=1
       for file in "${md_files[@]}"; do
         if ((first_iteration)); then
@@ -442,10 +1367,19 @@ EOF
         else
           echo -en "\n\n---\n\n\f\n"
         fi
-        bcs_code=$(get_bcs_code "$file") || bcs_code='BCS????'
-        echo "**Rule: $bcs_code**"
-        echo
-        cat "$file"
+
+        # Check if this is the header file (00-header.md)
+        basename_file=$(basename "$file")
+        if [[ "$basename_file" =~ ^00-header\. ]]; then
+          # Output header without Rule prefix
+          fix_header_level "$file" "$data_dir"
+        else
+          # Output with Rule prefix for all other files
+          bcs_code=$(get_bcs_code "$file") || bcs_code='BCS????'
+          echo "**Rule: $bcs_code**"
+          echo
+          fix_header_level "$file" "$data_dir"
+        fi
       done
       echo '#fin'
     } > "$output_file"
@@ -455,11 +1389,11 @@ EOF
 
     # Generate summary tier
     file_type='summary'
-    output_file="$BCS_DIR/BASH-CODING-STANDARD.summary.md"
+    output_file="$output_dir/BASH-CODING-STANDARD.summary.md"
     suffix='.summary.md'
     md_files=()
 
-    readarray -t md_files < <(find "$data_dir" -name "[0-9][0-9]-*$suffix" -type f ! -name "00-*" | sort)
+    readarray -t md_files < <(find "$data_dir" -name "*$suffix" -type f ! -name "README.md" | sort)
 
     if ((${#md_files[@]} == 0)); then
       error "No summary files found in '$data_dir'"
@@ -469,7 +1403,7 @@ EOF
     info "Generating summary standard from ${#md_files[@]} files..."
 
     {
-      local -- file bcs_code
+      local -- file bcs_code basename_file
       local -i first_iteration=1
       for file in "${md_files[@]}"; do
         if ((first_iteration)); then
@@ -477,10 +1411,19 @@ EOF
         else
           echo -en "\n\n---\n\n\f\n"
         fi
-        bcs_code=$(get_bcs_code "$file") || bcs_code='BCS????'
-        echo "**Rule: $bcs_code**"
-        echo
-        cat "$file"
+
+        # Check if this is the header file (00-header.md)
+        basename_file=$(basename "$file")
+        if [[ "$basename_file" =~ ^00-header\. ]]; then
+          # Output header without Rule prefix
+          fix_header_level "$file" "$data_dir"
+        else
+          # Output with Rule prefix for all other files
+          bcs_code=$(get_bcs_code "$file") || bcs_code='BCS????'
+          echo "**Rule: $bcs_code**"
+          echo
+          fix_header_level "$file" "$data_dir"
+        fi
       done
       echo '#fin'
     } > "$output_file"
@@ -490,11 +1433,11 @@ EOF
 
     # Generate abstract tier
     file_type='abstract'
-    output_file="$BCS_DIR/BASH-CODING-STANDARD.abstract.md"
+    output_file="$output_dir/BASH-CODING-STANDARD.abstract.md"
     suffix='.abstract.md'
     md_files=()
 
-    readarray -t md_files < <(find "$data_dir" -name "[0-9][0-9]-*$suffix" -type f ! -name "00-*" | sort)
+    readarray -t md_files < <(find "$data_dir" -name "*$suffix" -type f ! -name "README.md" | sort)
 
     if ((${#md_files[@]} == 0)); then
       error "No abstract files found in '$data_dir'"
@@ -504,7 +1447,7 @@ EOF
     info "Generating abstract standard from ${#md_files[@]} files..."
 
     {
-      local -- file bcs_code
+      local -- file bcs_code basename_file
       local -i first_iteration=1
       for file in "${md_files[@]}"; do
         if ((first_iteration)); then
@@ -512,10 +1455,19 @@ EOF
         else
           echo -en "\n\n---\n\n\f\n"
         fi
-        bcs_code=$(get_bcs_code "$file") || bcs_code='BCS????'
-        echo "**Rule: $bcs_code**"
-        echo
-        cat "$file"
+
+        # Check if this is the header file (00-header.md)
+        basename_file=$(basename "$file")
+        if [[ "$basename_file" =~ ^00-header\. ]]; then
+          # Output header without Rule prefix
+          fix_header_level "$file" "$data_dir"
+        else
+          # Output with Rule prefix for all other files
+          bcs_code=$(get_bcs_code "$file") || bcs_code='BCS????'
+          echo "**Rule: $bcs_code**"
+          echo
+          fix_header_level "$file" "$data_dir"
+        fi
       done
       echo '#fin'
     } > "$output_file"
@@ -564,11 +1516,8 @@ EOF
   esac
 
   # Find data directory
-  local -- data_dir="$BCS_DIR/data"
-  if [[ ! -d "$data_dir" ]]; then
-    error "Data directory not found '$data_dir'"
-    return 1
-  fi
+  local -- data_dir
+  data_dir=$(find_data_dir) || { error 'Data directory not found'; return 1; }
 
   # Find all matching files
   local -a md_files=()
@@ -750,7 +1699,8 @@ declare -fx cmd_search
 find_bcs_file_by_code() {
   local -- code="$1"
   local -- tier="${2:-abstract}"
-  local -- data_dir="$BCS_DIR/data"
+  local -- data_dir
+  data_dir=$(find_data_dir) || return 1
 
   # Validate inputs
   [[ -n "$code" ]] || return 2
@@ -768,6 +1718,16 @@ find_bcs_file_by_code() {
     summary) suffix='.summary.md' ;;
     *) return 2 ;;
   esac
+
+  # Handle BCS00 specially - the header file (top-level, not in a subdirectory)
+  if [[ "$code" == "00" ]]; then
+    local -- header_file="$data_dir/00-header$suffix"
+    if [[ -f "$header_file" ]]; then
+      echo "$header_file"
+      return 0
+    fi
+    return 1
+  fi
 
   # Handle section codes (2-digit codes like BCS01, BCS02, etc.)
   # These map to 00-section.{tier}.md files in the section directory
@@ -897,7 +1857,8 @@ load_filtered_rules() {
         local -- suffix
         [[ "$tier" == 'abstract' ]] && suffix='.abstract.md' || suffix='.summary.md'
 
-        local -- data_dir="$BCS_DIR/data"
+        local -- data_dir
+        data_dir=$(find_data_dir) || return 1
         local -a md_files=()
         readarray -t md_files < <(find "$data_dir" -name "*$suffix" -type f ! -name 'README.md' | sort)
 
@@ -1145,7 +2106,8 @@ declare -fx build_claude_command
 cmd_decode() {
   # Parse arguments
   local -a codes=()
-  local -- tier='abstract' output_format='absolute'
+  local -- tier output_format='absolute'
+  tier=$(get_default_tier)  # Use symlink to determine default tier
   local -i show_all=0 check_exists=0 print_contents=0
 
   while (($#)); do
@@ -1349,78 +2311,6 @@ EOF
 }
 declare -fx cmd_decode
 
-# Explain a specific BCS code
-cmd_explain() {
-  # Parse arguments
-  local -- code=''
-  local -- tier='abstract'
-
-  while (($#)); do
-    case "$1" in
-      -h|--help)
-        cat <<'EOF'
-bcs explain - Show detailed explanation of a specific BCS code
-
-Usage: bcs explain [OPTIONS] CODE
-
-Options:
-  -h, --help              Show this help message
-  -a, --abstract          Show abstract version (default)
-  -s, --summary           Show summary version
-  -c, --complete          Show complete version
-
-Examples:
-  bcs explain BCS010201                  # Show dual-purpose pattern (complete)
-  bcs explain BCS0205 -a                 # Show readonly pattern (abstract)
-  bcs explain BCS0103 --summary          # Show metadata (summary)
-
-EOF
-        return 0
-        ;;
-      -a|--abstract)
-        tier='abstract'
-        shift
-        ;;
-      -s|--summary)
-        tier='summary'
-        shift
-        ;;
-      -c|--complete)
-        tier='complete'
-        shift
-        ;;
-      -*)
-        error "Unknown option '$1'"
-        return 2
-        ;;
-      *)
-        code="$1"
-        shift
-        ;;
-    esac
-  done
-
-  # Validate code provided
-  if [[ -z "$code" ]]; then
-    error 'No BCS code specified'
-    info 'Usage: bcs explain [OPTIONS] CODE'
-    return 2
-  fi
-
-  # Use helper to find file
-  local -- found_file
-  found_file=$(find_bcs_file_by_code "$code" "$tier") || {
-    error "BCS code not found: ${code#BCS} ($tier tier)"
-    info "Use 'bcs codes' to list all available codes"
-    return 1
-  }
-
-  # Display the file
-  cat "$found_file"
-  return 0
-}
-declare -fx cmd_explain
-
 # List all sections
 cmd_sections() {
   # Handle --help
@@ -1448,14 +2338,22 @@ EOF
     return 1
   fi
 
-  # Extract ## headers (level 2), number them
+  # Extract main section headers (those preceded by **Rule: BCS##00**)
+  # Section codes end in 00: BCS0100, BCS0200, etc.
+  # Pattern: **Rule: BCS##00** \n (blank) \n ## Section Name
   local -i count=0
-  local -- line
+  local -- line prev_line='' prev_prev_line=''
 
   while IFS= read -r line; do
-    count+=1
-    echo "$count. $line"
-  done < <(grep '^## ' "$BCS_FILE" | sed 's/^## //')
+    # Check if line 2 back was a section code (BCS##00) and current line is a # header
+    if [[ "$prev_prev_line" =~ ^\*\*Rule:\ BCS[0-9]+00\*\*$ && "$line" =~ ^#\  ]]; then
+      # This # header is a section header
+      count+=1
+      echo "$count. ${line#\# }"
+    fi
+    prev_prev_line="$prev_line"
+    prev_line="$line"
+  done < "$BCS_FILE"
 
   if ((count == 0)); then
     error "No sections found in $BCS_FILE"
@@ -1525,7 +2423,8 @@ EOF
 
   # Gather statistics
   local -i sections_count=0 rules_count=0 lines_count=0 source_files_count=0 test_files_count=0
-  local -- data_dir="$BCS_DIR/data"
+  local -- data_dir
+  data_dir=$(find_data_dir) 2>/dev/null || data_dir=''
 
   if [[ -d "$data_dir" ]]; then
     sections_count=$(find "$data_dir" -maxdepth 1 -type d -name '[0-9][0-9]-*' 2>/dev/null | wc -l)
@@ -1618,7 +2517,7 @@ Code Quality:
 
 Repository:
   Main script:        bash-coding-standard (v$BCS_VERSION)
-  Subcommands:        11 (display, about, template, check, codes, generate, search, explain, decode, sections, help)
+  Subcommands:        11 (display, about, template, check, compress, codes, generate, search, decode, sections, help)
   License:            CC BY-SA 4.0
 
 EOF
@@ -1717,7 +2616,7 @@ Usage: bcs template [OPTIONS]
 Options:
   -h, --help              Show this help message
   -t, --type TYPE         Template type: minimal, basic, complete, library (default: basic)
-  -n, --name NAME         Script name (used for {{NAME}} placeholder)
+  -n, --name NAME         Script name (sanitized to valid identifier for {{NAME}} placeholder)
   -d, --description DESC  Script description (default: 'Script description')
   -v, --version VERSION   Version string (default: '1.0.0')
   -o, --output FILE       Output file (default: stdout)
@@ -1748,6 +2647,10 @@ Template types:
               • Exported functions (declare -fx)
               • Initialization function
               • No set -e (doesn't modify caller's shell)
+
+Note: Names are automatically sanitized to valid bash identifiers. Special
+      characters (hyphens, dots, etc.) are converted to underscores. For example,
+      'my-script.v2' becomes 'my_script_v2' in the generated template.
 
 Examples:
   bcs template                                        # Generate basic template to stdout
@@ -1813,8 +2716,20 @@ EOF
     fi
   fi
 
+  # Sanitize script name to valid bash identifier
+  # Converts special characters to underscores for use in variable names
+  local -- original_name="$script_name"
+  script_name=$(post_slug "$script_name" '_' 1 255)
+
+  # Warn if name was changed
+  if [[ "$original_name" != "$script_name" ]]; then
+    info "Sanitized name: '$original_name' → '$script_name'"
+  fi
+
   # Find templates directory
-  local -- templates_dir="$BCS_DIR/data/templates"
+  local -- data_dir templates_dir
+  data_dir=$(find_data_dir) || { error 'Data directory not found'; return 1; }
+  templates_dir="$data_dir/templates"
   if [[ ! -d "$templates_dir" ]]; then
     error "Templates directory not found '$templates_dir'"
     return 1
@@ -1871,7 +2786,8 @@ cmd_check() {
   # === SECTION 1: Variable Initialization ===
   local -- script_file=''
   local -- output_format='text'
-  local -- tier='abstract'
+  local -- tier
+  tier=$(get_default_tier)  # Use symlink to determine default tier
   local -- codes_option=''
   local -- sections_option=''
   local -- append_prompt=''
@@ -2073,7 +2989,6 @@ EOF
               ;;
 
       *)      script_file="$1"
-              break
               ;;
     esac
     shift
@@ -2130,9 +3045,9 @@ EOF
   # === SECTION 5: Prompt Construction ===
   info "Building validation prompt (tier: $tier)..."
 
-  local -- temp_prompt
+  local -- temp_prompt=''
   temp_prompt=$(mktemp) || { error 'Failed to create temporary file'; return 1; }
-  trap 'rm -f "$temp_prompt"' RETURN
+  trap 'rm -f "${temp_prompt:-}"' RETURN
 
   # Build system prompt with filtering
   if ((${#filters[@]} > 0)); then
@@ -2258,6 +3173,284 @@ EOF
 }
 declare -fx cmd_check
 
+# Compress BCS rules using AI (Developer Mode)
+cmd_compress() {
+  # Parse arguments
+  local -- tier=''
+  local -- claude_cmd='claude'
+  local -- context_level='none'  # Default: no context
+  local -i dry_run=0
+  local -i compress_verbose=1
+  local -i regenerate=0
+  local -i report_only=1  # Default mode
+  local -i summary_limit=10000
+  local -i abstract_limit=1500
+
+  while (($#)); do
+    case $1 in
+      -h|--help)
+        cat <<'EOF'
+bcs compress - Compress BCS rules using Claude AI (Developer Mode)
+
+Usage: bcs compress [OPTIONS]
+
+MODES:
+  --report-only        Report oversized files only (default)
+  --regenerate         Delete and regenerate all compressed files
+
+OPTIONS:
+  --tier TIER            Process specific tier: summary or abstract (default: both)
+  --claude-cmd CMD       Claude CLI command path (default: claude)
+  --summary-limit N      Summary file size limit in bytes (default: 10000)
+  --abstract-limit N     Abstract file size limit in bytes (default: 1500)
+  --context-level LEVEL  Context awareness level (default: none)
+                         • none: No additional context (fastest, cheapest)
+                         • toc: Table of contents only (~5-10KB context)
+                         • abstract: Full abstract standard (~83KB context)
+                         • summary: Full summary standard (~310KB context)
+                         • complete: Full complete standard (~520KB context)
+  -n, --dry-run          Show what would be done without doing it
+  -q, --quiet            Quiet mode (less verbose output)
+  -v, --verbose          Verbose mode (default)
+  -h, --help             Show this help message
+
+DESCRIPTION:
+  Uses Claude AI to automatically compress .complete.md rule files to
+  .summary.md and .abstract.md tiers while preserving technical accuracy.
+
+  This command enables "Developer Mode" features for managing custom rules
+  and maintaining multi-tier documentation.
+
+MODES IN DETAIL:
+  --report-only (default)
+    • Lists all files exceeding size limits by tier
+    • No modifications made to files
+    • Quick overview of compression needs
+    • Backward compatible with original behavior
+
+  --regenerate
+    • Deletes existing compressed files
+    • Regenerates all .summary.md and .abstract.md files from .complete.md
+    • Uses Claude AI with specialized compression prompts
+    • Syncs timestamps across all three tiers
+    • Automatic retry with stricter prompts for oversized files
+
+SIZE LIMITS:
+  complete:  20000 bytes (informational only, not enforced)
+  summary:   10000 bytes (default, adjustable with --summary-limit)
+  abstract:  1500 bytes (default, adjustable with --abstract-limit)
+
+CONTEXT LEVELS:
+  Understanding context awareness for better compression:
+
+  --context-level none (default, fastest)
+    • Each rule compressed in isolation
+    • No awareness of other rules
+    • Fastest, lowest token cost
+    • Use for: Testing, quick iterations
+
+  --context-level toc (lightweight)
+    • Includes table of contents + section summaries (~5-10KB)
+    • Structural awareness of what exists elsewhere
+    • Minimal token cost
+    • Use for: Moderate improvement with low overhead
+
+  --context-level abstract (recommended for most cases)
+    • Includes full BASH-CODING-STANDARD.abstract.md (~83KB)
+    • Full awareness of all other rules for cross-reference
+    • Can identify and eliminate cross-rule duplication
+    • Maintains consistent terminology across standard
+    • Good balance of context vs token cost
+    • Use for: Production regeneration, final compression
+
+  --context-level summary (detailed context)
+    • Includes full BASH-CODING-STANDARD.summary.md (~310KB)
+    • More detailed context than abstract tier
+    • Useful when compressing to abstract tier with rich examples
+    • Higher token cost than abstract context
+    • Use for: When abstract context isn't detailed enough
+
+  --context-level complete (maximum context)
+    • Includes full BASH-CODING-STANDARD.complete.md (~520KB)
+    • Most comprehensive context with all examples and rationale
+    • Highest token cost, slowest processing
+    • Use for: Complex rules requiring full documentation context
+    • Consider if results justify the token cost
+
+EXAMPLES:
+  # Report oversized files (current behavior)
+  bcs compress
+  bcs compress --report-only
+
+  # Regenerate with abstract context (recommended)
+  bcs compress --regenerate --context-level abstract
+
+  # Regenerate without context (fastest)
+  bcs compress --regenerate --context-level none
+
+  # Regenerate with TOC context (lightweight)
+  bcs compress --regenerate --context-level toc
+
+  # Regenerate with summary context (more detailed)
+  bcs compress --regenerate --context-level summary
+
+  # Regenerate with complete context (maximum detail)
+  bcs compress --regenerate --context-level complete
+
+  # Regenerate only summary files (dry-run)
+  bcs compress --regenerate --tier summary --dry-run
+
+  # Production regeneration (recommended settings)
+  bcs compress --regenerate --context-level abstract --verbose
+
+  # Use custom Claude command and limits
+  bcs compress --regenerate --context-level abstract \
+    --claude-cmd /usr/local/bin/claude \
+    --abstract-limit 1200 --summary-limit 8000
+
+  # Quiet mode for automation
+  bcs compress --regenerate --context-level abstract --quiet
+
+REQUIREMENTS:
+  Requires 'claude' CLI (Claude Code) to be installed and available in PATH.
+  Get Claude Code at: https://claude.ai/code
+
+WORKFLOW:
+  1. Edit .complete.md files with full documentation
+  2. Run: bcs compress --regenerate
+  3. Review compression statistics
+  4. Run: bcs generate --canonical
+  5. Commit all three tiers to repository
+
+NOTE: This is a developer mode feature for managing custom BCS rules and
+      maintaining the multi-tier documentation system.
+
+EOF
+        return 0
+        ;;
+
+      --report-only)
+        report_only=1
+        regenerate=0
+        ;;
+
+      --regenerate)
+        regenerate=1
+        report_only=0
+        ;;
+
+      --tier)
+        shift
+        [[ -n "${1:-}" ]] || { error 'Option --tier requires an argument'; return 2; }
+        tier="$1"
+        [[ "$tier" =~ ^(summary|abstract)$ ]] || {
+          error "Invalid tier: $tier (must be 'summary' or 'abstract')"
+          return 2
+        }
+        ;;
+
+      --claude-cmd)
+        shift
+        [[ -n "${1:-}" ]] || { error 'Option --claude-cmd requires an argument'; return 2; }
+        claude_cmd="$1"
+        ;;
+
+      --summary-limit)
+        shift
+        [[ -n "${1:-}" ]] || { error 'Option --summary-limit requires an argument'; return 2; }
+        summary_limit="$1"
+        ;;
+
+      --abstract-limit)
+        shift
+        [[ -n "${1:-}" ]] || { error 'Option --abstract-limit requires an argument'; return 2; }
+        abstract_limit="$1"
+        ;;
+
+      --context-level)
+        shift
+        [[ -n "${1:-}" ]] || { error 'Option --context-level requires an argument'; return 2; }
+        context_level="$1"
+        [[ "$context_level" =~ ^(none|toc|abstract|summary|complete)$ ]] || {
+          error "Invalid context level: $context_level (must be 'none', 'toc', 'abstract', 'summary', or 'complete')"
+          return 2
+        }
+        ;;
+
+      -n|--dry-run)
+        dry_run=1
+        ;;
+
+      -v|--verbose)
+        compress_verbose=1
+        ;;
+
+      -q|--quiet)
+        compress_verbose=0
+        ;;
+
+      -[nvqh]*) #shellcheck disable=SC2046
+        set -- '' $(printf -- "-%c " $(grep -o . <<<"${1:1}")) "${@:2}"
+        ;;
+
+      -*)
+        error "Invalid option: $1"
+        info "Use 'bcs compress --help' for usage information"
+        return 2
+        ;;
+
+      *)
+        error "Unexpected argument: $1"
+        return 2
+        ;;
+    esac
+    shift
+  done
+
+  # Find data directory
+  local -- data_dir
+  data_dir=$(find_data_dir) || { error 'Data directory not found'; return 1; }
+
+  # Verify data directory exists
+  [[ -d "$data_dir" ]] || { error "Data directory not found: $data_dir"; return 1; }
+
+  # Report-only mode
+  if ((report_only)); then
+    ((compress_verbose)) && info 'Report-only mode: listing oversized files'
+    compress_report_oversized_files "$data_dir" 20000 "$summary_limit" "$abstract_limit"
+    return 0
+  fi
+
+  # Regenerate mode
+  ((dry_run)) && ((compress_verbose)) && info 'DRY-RUN mode enabled - no changes will be made'
+  ((compress_verbose)) && info 'Regenerate mode: will delete and recreate compressed files'
+
+  # Validate Claude CLI
+  compress_validate_claude_cli "$claude_cmd" || return 1
+
+  # Process all rules
+  compress_process_all_rules "$data_dir" "$tier" "$claude_cmd" "$dry_run" \
+    "$compress_verbose" "$summary_limit" "$abstract_limit" "$context_level"
+
+  # Show statistics (note: this is a simplified version - full stats tracking
+  # would require modifying the helper functions to return statistics)
+  ((compress_verbose)) && >&2 echo
+  ((compress_verbose)) && success 'Compression processing complete'
+
+  if ((dry_run)); then
+    ((compress_verbose)) && info 'Dry-run complete - review output and run without --dry-run to execute'
+  else
+    ((compress_verbose)) && >&2 echo
+    ((compress_verbose)) && info 'Next steps:' \
+      '  1. Review any oversized files listed above' \
+      '  2. Manually compress critical oversized files if needed' \
+      '  3. Run: bcs generate --canonical'
+  fi
+
+  return 0
+}
+declare -fx cmd_compress
+
 # Show help information
 cmd_help() {
   local -- topic="${1:-}"
@@ -2265,35 +3458,35 @@ cmd_help() {
   # If topic specified, delegate to subcommand help
   if [[ -n "$topic" ]]; then
     case "$topic" in
-      display|show)
+      display)
         cmd_display --help
         ;;
-      codes|list-codes)
+      codes)
         cmd_codes --help
         ;;
-      generate|regen)
+      generate)
         cmd_generate --help
         ;;
-      search|grep)
+      search)
         cmd_search --help
         ;;
-      explain|show-rule)
-        cmd_explain --help
-        ;;
-      decode|resolve)
+      decode)
         cmd_decode --help
         ;;
-      sections|toc)
+      sections)
         cmd_sections --help
         ;;
-      about|info)
+      about)
         cmd_about --help
         ;;
-      template|new)
+      template)
         cmd_template --help
         ;;
-      check|validate)
+      check)
         cmd_check --help
+        ;;
+      compress)
+        cmd_compress --help
         ;;
       *)
         error "Unknown command '$topic'"
@@ -2311,15 +3504,15 @@ bcs - Bash Coding Standard toolkit
 Usage: bcs [COMMAND] [OPTIONS] [ARGS]
 
 Commands:
-  display            Display the Bash Coding Standard (default)
+  display            Display the Bash Coding Standard
   about              Display project information and statistics
   template           Generate BCS-compliant script templates
   check              AI-powered script compliance checker
+  compress           Compress BCS rules using Claude AI
   codes              List all BCS rule codes with titles
   generate           Regenerate standard from data/ tree
   search PATTERN     Search within the standard
-  explain CODE       Show detailed explanation of a BCS code
-  decode CODE        Decode BCS code to file location
+  decode CODE        Decode BCS code to file location or content
   sections           List all sections of the standard
   help [COMMAND]     Show help for a command
 
@@ -2333,10 +3526,11 @@ Examples:
   bcs about --stats                      # Show statistics only
   bcs template -t complete -o test.sh    # Generate complete template
   bcs check myscript.sh                  # Check script compliance with AI
+  bcs compress --regenerate              # Regenerate compressed rule files
   bcs -c                                 # Display using cat (backward compat)
   bcs codes                              # List all BCS codes
   bcs search readonly                    # Search for "readonly"
-  bcs explain BCS010201                  # Explain dual-purpose pattern
+  bcs decode BCS010201 -p                # View dual-purpose pattern rule
   bcs decode BCS010201                   # Show file location for BCS010201
   bcs generate --canonical               # Regenerate canonical standard
   bcs sections                           # List all 14 sections
@@ -2353,8 +3547,10 @@ declare -fx cmd_help
 
 cmd_display() {
   if [[ -z "$BCS_FILE" ]]; then
-    BCS_PATH="$(realpath -- "${BASH_SOURCE[0]}")"
-    BCS_FILE=$(find_bcs_file "${BCS_PATH%/*}") || {
+    # BCS_PATH may already be set and readonly from script initialization
+    local -- path
+    path="${BCS_PATH:-$(realpath -- "${BASH_SOURCE[0]}")}"
+    BCS_FILE=$(find_bcs_file "${path%/*}") || {
       error 'BASH-CODING-STANDARD.md not found when sourcing'
       return 1
     }
@@ -2505,20 +3701,10 @@ fi
 set -euo pipefail
 shopt -s inherit_errexit shift_verbose
 
-# Script metadata and find BASH-CODING-STANDARD.md
-declare -- BCS_FILE
-BCS_FILE=$(find_bcs_file "${BCS_PATH%/*}") || {
-  error "BASH-CODING-STANDARD.md not found"
-  info  'Searched locations:' \
-        "  - ${BCS_PATH%/*}/BASH-CODING-STANDARD.md" \
-        '  - /usr/local/share/yatti/bash-coding-standard/BASH-CODING-STANDARD.md' \
-        '  - /usr/share/yatti/bash-coding-standard/BASH-CODING-STANDARD.md'
-  exit 1
-}
-
-# Command dispatcher
-# Default to display if no arguments, otherwise use first argument as subcommand
-declare -- subcommand
+main() {
+  # Command dispatcher
+  # Default to display if no arguments, otherwise use first argument as subcommand
+  declare -- subcommand
 if (($# == 0)); then
   subcommand='display'
 else
@@ -2538,6 +3724,36 @@ case "$subcommand" in
     ;;
 esac
 
+# Commands that require BCS_FILE to exist: display, search, sections
+# Other commands work directly with data/ directory or don't need the standard file
+declare -- BCS_FILE='' install_share="${BCS_DIR%/bin}/share/yatti/bash-coding-standard"
+case "$subcommand" in
+  display|search|sections)
+    # These commands require the standard file
+    BCS_FILE=$(find_bcs_file "${BCS_PATH%/*}") || {
+      error "BASH-CODING-STANDARD.md not found"
+      info  'Searched locations:' \
+            "  - $BCS_DIR/BASH-CODING-STANDARD.md" \
+            "  - $install_share/BASH-CODING-STANDARD.md" \
+            '  - /usr/local/share/yatti/bash-coding-standard/BASH-CODING-STANDARD.md' \
+            '  - /usr/share/yatti/bash-coding-standard/BASH-CODING-STANDARD.md'
+      exit 1
+    }
+    ;;
+  -*)
+    # Backward compatibility for display options (e.g., bcs -c)
+    BCS_FILE=$(find_bcs_file "${BCS_PATH%/*}") || {
+      error "BASH-CODING-STANDARD.md not found"
+      info  'Searched locations:' \
+            "  - $BCS_DIR/BASH-CODING-STANDARD.md" \
+            "  - $install_share/BASH-CODING-STANDARD.md" \
+            '  - /usr/local/share/yatti/bash-coding-standard/BASH-CODING-STANDARD.md' \
+            '  - /usr/share/yatti/bash-coding-standard/BASH-CODING-STANDARD.md'
+      exit 1
+    }
+    ;;
+esac
+
 # Backward compatibility: if starts with dash, treat as display option
 # Note: need to restore the argument for cmd_display
 if [[ "$subcommand" == -* ]]; then
@@ -2547,34 +3763,34 @@ fi
 
 # Dispatch to subcommand
 case "$subcommand" in
-  display|show)
+  display)
     cmd_display "$@"
     ;;
-  about|info)
+  about)
     cmd_about "$@"
     ;;
-  template|new)
+  template)
     cmd_template "$@"
     ;;
-  check|validate)
+  check)
     cmd_check "$@"
     ;;
-  codes|list-codes)
+  compress)
+    cmd_compress "$@"
+    ;;
+  codes)
     cmd_codes "$@"
     ;;
-  generate|regen)
+  generate)
     cmd_generate "$@"
     ;;
-  search|grep)
+  search)
     cmd_search "$@"
     ;;
-  explain|show-rule)
-    cmd_explain "$@"
-    ;;
-  decode|resolve)
+  decode)
     cmd_decode "$@"
     ;;
-  sections|toc)
+  sections)
     cmd_sections "$@"
     ;;
   help)
@@ -2582,9 +3798,11 @@ case "$subcommand" in
     ;;
   *)
     error "Unknown command '$subcommand'"
-    info 'Try 'bcs help' for usage information'
+    info "Try 'bcs help' for usage information"
     exit 2
     ;;
 esac
+}
 
+main "$@"
 #fin

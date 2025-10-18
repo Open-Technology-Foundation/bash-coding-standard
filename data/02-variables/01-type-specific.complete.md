@@ -1,4 +1,4 @@
-### Type-Specific Declarations
+## Type-Specific Declarations
 
 **Always use explicit type declarations (`declare -i`, `declare --`, `declare -a`, `declare -A`) to make variable intent clear and enable type-safe operations. Explicit typing prevents bugs, improves readability, and enables bash's built-in type checking.**
 

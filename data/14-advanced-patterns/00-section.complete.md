@@ -1,3 +1,3 @@
-## Advanced Patterns
+# Advanced Patterns
 
 This extensive section covers 10 advanced patterns essential for production-grade system administration and automation scripts. It includes debugging techniques (set -x, PS4 customization), dry-run mode implementation for safe testing, secure temporary file handling with mktemp, environment variable patterns, regular expression usage for pattern matching, background job management for parallel execution, structured logging practices, performance profiling for optimization, testing methodologies for validation, and progressive state management using boolean flags that change based on runtime conditions. These patterns solve real-world challenges in complex scripts: safe testing before deployment, performance optimization, robust error handling, and maintainable state logic that separates decision-making from execution.

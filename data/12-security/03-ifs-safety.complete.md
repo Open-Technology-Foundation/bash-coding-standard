@@ -1,4 +1,4 @@
-### IFS Manipulation Safety
+## IFS Manipulation Safety
 
 **Never trust or use inherited IFS values. Always protect IFS changes to prevent field splitting attacks and unexpected behavior.**
 

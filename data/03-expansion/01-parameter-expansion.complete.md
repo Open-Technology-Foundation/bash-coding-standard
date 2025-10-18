@@ -1,4 +1,4 @@
-### Parameter Expansion
+## Parameter Expansion
 ```bash
 SCRIPT_NAME=${SCRIPT_PATH##*/} # Remove longest prefix pattern
 SCRIPT_DIR=${SCRIPT_PATH%/*}   # Remove shortest suffix pattern

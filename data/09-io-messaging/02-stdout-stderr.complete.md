@@ -1,4 +1,4 @@
-### STDOUT vs STDERR
+## STDOUT vs STDERR
 - All error messages should go to \`STDERR\`
 - Place \`>&2\` at the *beginning* commands for clarity
 

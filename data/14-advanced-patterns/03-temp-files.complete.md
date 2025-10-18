@@ -1,4 +1,4 @@
-### Temporary File Handling
+## Temporary File Handling
 
 **Always use `mktemp` to create temporary files and directories, never hard-code temp file paths. Use trap handlers to ensure cleanup occurs even on script failure or interruption. Store temp file paths in variables, make them readonly when possible, and always clean up in EXIT trap. Proper temp file handling prevents security vulnerabilities, avoids file collisions, and ensures resources are released.**
 

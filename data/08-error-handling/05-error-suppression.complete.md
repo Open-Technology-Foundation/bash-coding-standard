@@ -1,4 +1,4 @@
-### Error Suppression
+## Error Suppression
 
 **Only suppress errors when the failure is expected, non-critical, and you have explicitly decided it's safe to continue. Always document WHY errors are being suppressed. Indiscriminate error suppression masks bugs and creates unreliable scripts.**
 

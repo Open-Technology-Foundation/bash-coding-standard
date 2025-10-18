@@ -1,4 +1,4 @@
-### Exit on Error
+## Exit on Error
 ```bash
 set -euo pipefail
 # -e: Exit on command failure

@@ -174,7 +174,7 @@ test_invalid_options() {
   # Test invalid option at beginning
   local -- output
   output=$("$SCRIPT" non-option-arg 2>&1) || true
-  assert_contains "$output" "error:" "bcs rejects non-option arguments"
+  assert_contains "$output" "bcs: ✗" "bcs rejects non-option arguments"
 
   # Test invalid option with dash
   # Note: Unknown long options are passed to viewer (cat), which reports the error

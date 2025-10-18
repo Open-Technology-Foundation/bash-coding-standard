@@ -1,4 +1,4 @@
-### Regular Expression Guidelines
+## Regular Expression Guidelines
 
 Best practices for using regular expressions in Bash.
 

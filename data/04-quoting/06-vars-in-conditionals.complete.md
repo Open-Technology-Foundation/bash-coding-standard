@@ -1,4 +1,4 @@
-### Variables in Conditionals
+## Variables in Conditionals
 
 **Always quote variables in test expressions to prevent word splitting and glob expansion, even when the variable is guaranteed to contain a safe value. Variable quoting in conditionals is mandatory; static comparison values follow normal quoting rules (single quotes for literals, unquoted for one-word values).**
 

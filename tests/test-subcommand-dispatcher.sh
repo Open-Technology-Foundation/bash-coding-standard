@@ -22,8 +22,9 @@ test_dispatcher_help() {
   assert_contains "$output" "codes" "help lists codes command"
   assert_contains "$output" "generate" "help lists generate command"
   assert_contains "$output" "search" "help lists search command"
-  assert_contains "$output" "explain" "help lists explain command"
+  assert_contains "$output" "decode" "help lists decode command"
   assert_contains "$output" "sections" "help lists sections command"
+  assert_contains "$output" "compress" "help lists compress command"
 }
 
 test_dispatcher_no_args_defaults_to_display() {
@@ -70,42 +71,6 @@ test_dispatcher_subcommand_routing() {
   # Test sections
   output=$("$SCRIPT" sections 2>&1 | head -1 || true)
   assert_contains "$output" "[0-9]+\." "sections command works"
-}
-
-test_dispatcher_subcommand_aliases() {
-  test_section "Subcommand Aliases Tests"
-
-  local -- output1 output2
-
-  # Test display aliases
-  output1=$("$SCRIPT" display 2>&1 | head -5 || true)
-  output2=$("$SCRIPT" show 2>&1 | head -5 || true)
-  assert_equals "$output1" "$output2" "display and show are aliases"
-
-  # Test codes aliases
-  output1=$("$SCRIPT" codes 2>&1 | head -5 || true)
-  output2=$("$SCRIPT" list-codes 2>&1 | head -5 || true)
-  assert_equals "$output1" "$output2" "codes and list-codes are aliases"
-
-  # Test generate aliases
-  output1=$("$SCRIPT" generate --help 2>&1 | head -5 || true)
-  output2=$("$SCRIPT" regen --help 2>&1 | head -5 || true)
-  assert_equals "$output1" "$output2" "generate and regen are aliases"
-
-  # Test search aliases
-  output1=$("$SCRIPT" search --help 2>&1 | head -5 || true)
-  output2=$("$SCRIPT" grep --help 2>&1 | head -5 || true)
-  assert_equals "$output1" "$output2" "search and grep are aliases"
-
-  # Test explain aliases
-  output1=$("$SCRIPT" explain --help 2>&1 | head -5 || true)
-  output2=$("$SCRIPT" show-rule --help 2>&1 | head -5 || true)
-  assert_equals "$output1" "$output2" "explain and show-rule are aliases"
-
-  # Test sections aliases
-  output1=$("$SCRIPT" sections 2>&1)
-  output2=$("$SCRIPT" toc 2>&1)
-  assert_equals "$output1" "$output2" "sections and toc are aliases"
 }
 
 test_dispatcher_unknown_command() {
@@ -172,7 +137,6 @@ test_dispatcher_help
 test_dispatcher_no_args_defaults_to_display
 test_dispatcher_backward_compat_dash_options
 test_dispatcher_subcommand_routing
-test_dispatcher_subcommand_aliases
 test_dispatcher_unknown_command
 test_dispatcher_help_delegation
 test_dispatcher_global_options

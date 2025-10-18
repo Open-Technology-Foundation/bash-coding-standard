@@ -34,7 +34,7 @@ test_check_missing_file() {
   output=$("$SCRIPT" check 2>&1) || exit_code=$?
 
   assert_not_zero "$exit_code" "Missing file argument returns error"
-  assert_contains "$output" "error" "Error message when file missing"
+  assert_contains "$output" "No script file specified" "Error message when file missing"
 }
 
 test_check_file_not_found() {
@@ -171,16 +171,6 @@ test_check_strict_option() {
   pass "Strict option is syntactically valid"
 }
 
-test_check_alias() {
-  test_section "Check Alias Tests"
-
-  # Test validate alias
-  local -- output1 output2
-  output1=$("$SCRIPT" check --help 2>&1 | head -5 || true)
-  output2=$("$SCRIPT" validate --help 2>&1 | head -5 || true)
-
-  assert_equals "$output1" "$output2" "check and validate produce same output"
-}
 
 test_check_help_exit_code() {
   test_section "Check Help Exit Code Tests"
@@ -216,7 +206,6 @@ test_check_valid_formats
 test_check_claude_availability
 test_check_custom_claude_cmd
 test_check_strict_option
-test_check_alias
 test_check_help_exit_code
 test_check_error_messages
 

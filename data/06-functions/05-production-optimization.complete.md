@@ -1,4 +1,4 @@
-### Production Script Optimization
+## Production Script Optimization
 Once a script is mature and ready for production:
 - Remove unused utility functions (e.g., if `yn()`, `decp()`, `trim()`, `s()` are not used)
 - Remove unused global variables (e.g., `PROMPT`, `DEBUG` if not referenced)

@@ -1,4 +1,4 @@
-#### Comments
+## Comments
 
 Focus comments on explaining **WHY** (rationale, business logic, non-obvious decisions) rather than **WHAT** (which the code already shows):
 

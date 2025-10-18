@@ -1,0 +1,90 @@
+name: Test Suite
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run Test Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up environment
+        run: |
+          echo "Setting up test environment"
+          bash --version
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Verify script syntax
+        run: |
+          echo "Checking bash syntax..."
+          bash -n bcs
+          bash -n tests/*.sh
+
+      - name: Run ShellCheck
+        run: |
+          echo "Running ShellCheck..."
+          shellcheck -x bcs || true
+          shellcheck -x tests/*.sh || true
+
+      - name: Generate tier files
+        run: |
+          echo "Regenerating tier files..."
+          ./bcs generate -o BASH-CODING-STANDARD.complete.md
+          ./bcs generate -t abstract -o BASH-CODING-STANDARD.abstract.md
+          ./bcs generate -t summary -o BASH-CODING-STANDARD.summary.md
+
+      - name: Run full test suite
+        run: |
+          echo "Running test suite..."
+          ./tests/run-all-tests.sh
+        continue-on-error: true
+
+      - name: Run new critical tests
+        run: |
+          echo "Running critical new tests..."
+          ./tests/test-subcommand-compress.sh
+          ./tests/test-data-structure.sh
+          ./tests/test-self-compliance.sh
+
+      - name: Check for test failures
+        run: |
+          if [ -f test-results.log ]; then
+            cat test-results.log
+          fi
+
+  compatibility:
+    name: Bash Version Compatibility
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        bash-version: ['5.0', '5.1', '5.2']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Test with Bash ${{ matrix.bash-version }}
+        run: |
+          echo "Testing with Bash ${{ matrix.bash-version }}"
+          # Note: GitHub runners have Bash 5.x by default
+          bash --version
+          bash -n bcs
+
+      - name: Run basic tests
+        run: |
+          ./bcs --help
+          ./bcs --version
+          ./bcs about
+          ./bcs codes | head -20

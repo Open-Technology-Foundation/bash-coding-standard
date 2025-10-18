@@ -1,4 +1,4 @@
-### Pipes to While Loops
+## Pipes to While Loops
 
 **Avoid piping commands to while loops because pipes create subshells where variable assignments don't persist outside the loop. Use process substitution `< <(command)` or `readarray` instead. This is one of the most common and insidious bugs in Bash scripts.**
 

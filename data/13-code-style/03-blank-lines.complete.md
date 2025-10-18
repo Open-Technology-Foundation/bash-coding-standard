@@ -1,4 +1,4 @@
-#### Blank Line Usage
+## Blank Line Usage
 
 Use blank lines strategically to improve readability by creating visual separation between logical blocks:
 

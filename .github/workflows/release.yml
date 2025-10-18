@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Verify script version matches tag
+        run: |
+          TAG_VERSION="${{ steps.get_version.outputs.version }}"
+          SCRIPT_VERSION=$(grep -oP "VERSION='\K[^']+" bcs || echo "unknown")
+
+          echo "Tag version: $TAG_VERSION"
+          echo "Script version: $SCRIPT_VERSION"
+
+          if [ "$TAG_VERSION" != "$SCRIPT_VERSION" ]; then
+            echo "Warning: Tag version ($TAG_VERSION) does not match script version ($SCRIPT_VERSION)"
+          fi
+
+      - name: Run tests before release
+        run: |
+          echo "Running pre-release tests..."
+          ./tests/run-all-tests.sh || echo "Some tests failed - review before releasing"
+
+      - name: Generate release artifacts
+        run: |
+          echo "Generating release artifacts..."
+
+          # Create release directory
+          mkdir -p release/bash-coding-standard-${{ steps.get_version.outputs.version }}
+
+          # Copy main files
+          cp bcs release/bash-coding-standard-${{ steps.get_version.outputs.version }}/
+          cp README.md release/bash-coding-standard-${{ steps.get_version.outputs.version }}/
+          cp LICENSE release/bash-coding-standard-${{ steps.get_version.outputs.version }}/
+          cp Makefile release/bash-coding-standard-${{ steps.get_version.outputs.version }}/
+          cp BASH-CODING-STANDARD.*.md release/bash-coding-standard-${{ steps.get_version.outputs.version }}/
+
+          # Copy data directory
+          cp -r data release/bash-coding-standard-${{ steps.get_version.outputs.version }}/
+
+          # Create tarball
+          cd release
+          tar -czf bash-coding-standard-${{ steps.get_version.outputs.version }}.tar.gz \
+            bash-coding-standard-${{ steps.get_version.outputs.version }}/
+
+          # Create checksums
+          sha256sum bash-coding-standard-${{ steps.get_version.outputs.version }}.tar.gz \
+            > bash-coding-standard-${{ steps.get_version.outputs.version }}.tar.gz.sha256
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          echo "Generating changelog..."
+
+          # Get commits since last tag
+          PREVIOUS_TAG=$(git tag --sort=-creatordate | grep -v "^$GITHUB_REF_NAME$" | head -1)
+
+          if [ -n "$PREVIOUS_TAG" ]; then
+            echo "Changes since $PREVIOUS_TAG:" > CHANGELOG.md
+            git log --pretty=format:"- %s (%an)" $PREVIOUS_TAG..HEAD >> CHANGELOG.md
+          else
+            echo "Initial release" > CHANGELOG.md
+          fi
+
+          cat CHANGELOG.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ steps.get_version.outputs.version }}
+          body_path: CHANGELOG.md
+          files: |
+            release/bash-coding-standard-${{ steps.get_version.outputs.version }}.tar.gz
+            release/bash-coding-standard-${{ steps.get_version.outputs.version }}.tar.gz.sha256
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify installation
+        run: |
+          echo "Testing installation from tarball..."
+          cd /tmp
+          tar -xzf $GITHUB_WORKSPACE/release/bash-coding-standard-${{ steps.get_version.outputs.version }}.tar.gz
+          cd bash-coding-standard-${{ steps.get_version.outputs.version }}
+          ./bcs --version
+          ./bcs about

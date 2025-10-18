@@ -1,4 +1,4 @@
-### Version Output Format
+## Version Output Format
 
 **Standard format:** \`<script_name> <version_number>\`
 

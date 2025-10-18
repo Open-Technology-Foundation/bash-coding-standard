@@ -1,4 +1,4 @@
-### Process Substitution
+## Process Substitution
 
 **Use process substitution `<(command)` and `>(command)` to provide command output as file-like inputs or to send data to commands as if writing to files. Process substitution eliminates the need for temporary files, avoids subshell issues with pipes, and enables powerful command composition patterns.**
 

@@ -1,4 +1,4 @@
-### Debugging and Development
+## Debugging and Development
 
 Enable debugging features for development and troubleshooting.
 

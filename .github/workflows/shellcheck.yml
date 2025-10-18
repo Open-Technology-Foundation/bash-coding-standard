@@ -1,0 +1,88 @@
+name: ShellCheck
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  workflow_dispatch:
+
+jobs:
+  shellcheck:
+    name: ShellCheck Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck --version
+
+      - name: Run ShellCheck on main script
+        run: |
+          echo "Analyzing bcs script..."
+          shellcheck -x -f gcc bcs > shellcheck-bcs.log || true
+
+          if [ -s shellcheck-bcs.log ]; then
+            echo "ShellCheck found issues in bcs:"
+            cat shellcheck-bcs.log
+          else
+            echo "✓ bcs passes ShellCheck"
+          fi
+
+      - name: Run ShellCheck on test scripts
+        run: |
+          echo "Analyzing test scripts..."
+          shellcheck -x tests/*.sh > shellcheck-tests.log || true
+
+          if [ -s shellcheck-tests.log ]; then
+            echo "ShellCheck found issues in tests:"
+            cat shellcheck-tests.log
+          else
+            echo "✓ All test scripts pass ShellCheck"
+          fi
+
+      - name: Run ShellCheck on templates
+        run: |
+          echo "Analyzing template files..."
+          for template in data/templates/*.template; do
+            if [ -f "$template" ]; then
+              echo "Checking $template"
+              shellcheck "$template" || true
+            fi
+          done
+
+      - name: Generate ShellCheck report
+        run: |
+          echo "# ShellCheck Report" > shellcheck-report.md
+          echo "" >> shellcheck-report.md
+          echo "## Main Script" >> shellcheck-report.md
+          if [ -s shellcheck-bcs.log ]; then
+            echo '```' >> shellcheck-report.md
+            cat shellcheck-bcs.log >> shellcheck-report.md
+            echo '```' >> shellcheck-report.md
+          else
+            echo "✓ No issues found" >> shellcheck-report.md
+          fi
+          echo "" >> shellcheck-report.md
+          echo "## Test Scripts" >> shellcheck-report.md
+          if [ -s shellcheck-tests.log ]; then
+            echo '```' >> shellcheck-report.md
+            cat shellcheck-tests.log >> shellcheck-report.md
+            echo '```' >> shellcheck-report.md
+          else
+            echo "✓ No issues found" >> shellcheck-report.md
+          fi
+
+      - name: Upload ShellCheck report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shellcheck-report
+          path: |
+            shellcheck-report.md
+            shellcheck-*.log

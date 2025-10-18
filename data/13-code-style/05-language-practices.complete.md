@@ -1,4 +1,4 @@
-### Language Best Practices
+## Language Best Practices
 
 #### Command Substitution
 Always use `$()` instead of backticks for command substitution.

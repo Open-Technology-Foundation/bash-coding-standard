@@ -1,4 +1,4 @@
-### Readonly Declaration
+## Readonly Declaration
 Use `readonly` for constants to prevent accidental modification.
 
 ```bash

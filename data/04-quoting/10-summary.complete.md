@@ -1,4 +1,4 @@
-### Summary Reference
+## Summary Reference
 
 | Content Type | Quote Style | Example |
 |--------------|-------------|---------|

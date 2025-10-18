@@ -1,3 +1,3 @@
-## Code Style & Best Practices
+# Code Style & Best Practices
 
 This comprehensive section establishes coding conventions organized into themed subsections: code formatting (2-space indentation, 100-character line length, consistent alignment), commenting practices (explain WHY not WHAT, focus on rationale and business logic), blank line usage for visual section separation, section comment patterns using banner-style markers, language-specific practices (Bash idioms, pattern preferences, modern features), and development practices (mandatory ShellCheck compliance, testing patterns, version control integration). These guidelines ensure scripts are readable, maintainable, and professional while leveraging modern Bash 5.2+ features effectively.

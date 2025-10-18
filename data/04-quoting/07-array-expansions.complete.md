@@ -1,4 +1,4 @@
-### Array Expansions
+## Array Expansions
 
 **Always quote array expansions with double quotes to preserve element boundaries and prevent word splitting. Use `"${array[@]}"` for separate elements and `"${array[*]}"` for a single concatenated string. Proper array quoting is critical for handling elements containing spaces, newlines, or special characters.**
 

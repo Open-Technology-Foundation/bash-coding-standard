@@ -1,4 +1,4 @@
-#### Section Comments
+## Section Comments
 
 Use lightweight section comments to organize code into logical groups. These are simpler than full 80-dash separators and provide just enough context:
 

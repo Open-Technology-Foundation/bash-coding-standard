@@ -1,4 +1,4 @@
-### Checking Return Values
+## Checking Return Values
 
 **Always check return values of commands and function calls, providing informative error messages that include context about what failed. While `set -e` helps, explicit checking gives better control over error handling and messaging.**
 

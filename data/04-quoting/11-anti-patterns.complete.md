@@ -1,4 +1,4 @@
-### Anti-Patterns (What NOT to Do)
+## Anti-Patterns (What NOT to Do)
 
 **This section catalogues common quoting mistakes that lead to bugs, security vulnerabilities, and poor code quality. Each anti-pattern is shown with the incorrect form (✗) and the correct alternative (✓). Understanding these anti-patterns is critical for writing robust, maintainable Bash scripts.**
 

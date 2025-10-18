@@ -1,4 +1,4 @@
-### Case Statements
+## Case Statements
 
 **Use `case` statements for multi-way branching based on pattern matching. Case statements are more readable and efficient than long `if/elif` chains when testing a single value against multiple patterns. Choose compact format for simple single-action cases, and expanded format for multi-line logic. Always align actions consistently and use appropriate pattern matching syntax.**
 

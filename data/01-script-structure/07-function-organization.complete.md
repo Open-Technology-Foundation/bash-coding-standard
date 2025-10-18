@@ -1,4 +1,4 @@
-### Function Organization
+## Function Organization
 
 **Always organize functions bottom-up: lowest-level primitives first (messaging, utilities), then composition layers, ending with `main()` as the highest-level orchestrator. This pattern makes scripts readable, maintainable, and eliminates forward reference issues.**
 

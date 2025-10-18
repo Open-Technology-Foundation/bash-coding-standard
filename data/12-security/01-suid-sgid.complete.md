@@ -1,4 +1,4 @@
-### SUID/SGID
+## SUID/SGID
 
 **Never use SUID (Set User ID) or SGID (Set Group ID) bits on Bash scripts. This is a critical security prohibition with no exceptions.**
 

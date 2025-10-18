@@ -1,4 +1,4 @@
-### Function Names
+## Function Names
 Use lowercase with underscores to match shell conventions and avoid conflicts with built-in commands.
 
 ```bash

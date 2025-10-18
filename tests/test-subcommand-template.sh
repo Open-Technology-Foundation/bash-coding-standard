@@ -219,21 +219,6 @@ test_template_errors() {
   assert_contains "$output" "minimal, basic, complete, library" "Error shows valid types"
 }
 
-# Test alias support
-test_template_alias() {
-  test_section "Alias Support Tests"
-  local -- output exit_code
-
-  # Test 'new' alias
-  output=$("$SCRIPT" new --help 2>&1) && exit_code=0 || exit_code=$?
-  assert_zero $exit_code "'new' alias works"
-  assert_contains "$output" "bcs template" "Alias shows template help"
-
-  # Test actual generation with alias
-  output=$("$SCRIPT" new -t minimal 2>&1) && exit_code=0 || exit_code=$?
-  assert_zero $exit_code "'new' alias generates templates"
-  assert_contains "$output" "#!/usr/bin/env bash" "Alias produces valid output"
-}
 
 # Test exit codes
 test_template_exit_codes() {
@@ -294,7 +279,6 @@ test_template_file_output
 test_template_executable
 test_template_force_overwrite
 test_template_errors
-test_template_alias
 test_template_exit_codes
 test_template_name_inference
 

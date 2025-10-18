@@ -1,4 +1,4 @@
-### Standard Argument Parsing Pattern
+## Standard Argument Parsing Pattern
 
 **Complete pattern with short option support:**
 

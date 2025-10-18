@@ -1,4 +1,4 @@
-### String Trimming
+## String Trimming
 \`\`\`bash
 trim() {
   local v="$*"

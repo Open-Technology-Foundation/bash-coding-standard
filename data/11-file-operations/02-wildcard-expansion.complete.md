@@ -1,4 +1,4 @@
-### Wildcard Expansion
+## Wildcard Expansion
 Always use explicit path when doing wildcard expansion to avoid issues with filenames starting with \`-\`.
 
 \`\`\`bash

@@ -30,7 +30,7 @@ test_direct_execution() {
 
   # Test 4: Error handling works
   output=$("$SCRIPT" invalid-arg 2>&1) || true
-  assert_contains "$output" "error:" "Script reports errors correctly"
+  assert_contains "$output" "bcs: ✗" "Script reports errors correctly"
 
   # Test 5: Script metadata is set
   # Test that the script finds BCS_PATH and BCS_FILE
@@ -176,7 +176,7 @@ test_error_handling_in_modes() {
   # Test 1: Direct execution exits on invalid args
   local -- output
   output=$("$SCRIPT" invalid-arg 2>&1) || true
-  assert_contains "$output" "error:" "Direct execution reports errors"
+  assert_contains "$output" "bcs: ✗" "Direct execution reports errors"
 
   # Test 2: display_BCS function returns error code
   local -- test_script

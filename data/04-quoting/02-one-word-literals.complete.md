@@ -1,4 +1,4 @@
-### Exception: One-Word Literals
+## Exception: One-Word Literals
 
 **Literal one-word values containing only safe characters (alphanumeric, underscore, hyphen, dot, or slash) may be left unquoted in variable assignments and simple conditionals. However, using quotes is more defensive, consistent, and recommended for all but the simplest cases. This exception exists to acknowledge common practice, but when in doubt, quote everything.**
 

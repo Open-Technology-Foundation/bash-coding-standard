@@ -1,4 +1,4 @@
-### Exit Codes
+## Exit Codes
 
 **Standard implementation:**
 ```bash

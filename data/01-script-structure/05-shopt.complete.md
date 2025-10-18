@@ -1,4 +1,4 @@
-### shopt
+## shopt
 
 **Recommended settings for most scripts:**
 

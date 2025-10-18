@@ -93,11 +93,23 @@ BASH-CODING-STANDARD.summary.md
 data/**/*.abstract.md
 data/**/*.summary.md
 
-# Analysis and planning documents
+# Temporary files
+*.tmp
+.compress_helpers.tmp
+
+# Analysis and planning documents (archived to .gudang/)
+BCS-SHELLCHECK-INTEGRATION.md
+BCS-SHELLCHECK.md
+BCS-SHELLCHECK-STRUCTURAL-ANALYSIS.md
 DEFICIENT-RULES-REPORT.md
-IMPROVEMENTS-NEEDED.md
+DEVELOPMENT.md
 FUTURE-SUBCOMMANDS.md
+IMPROVEMENTS-NEEDED.md
+REBUTTALS-FAQ.md
 rule-mdfile-format.md
+
+# Legacy scripts
+BASH-CODING-STANDARD.sh
 
 # Builtins build artifacts
 builtins/*.so

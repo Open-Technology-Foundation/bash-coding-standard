@@ -1,4 +1,4 @@
-### Strings with Variables
+## Strings with Variables
 
 Use double quotes when the string contains variables that need expansion:
 

@@ -1,4 +1,4 @@
-### Usage Documentation
+## Usage Documentation
 \`\`\`bash
 show_help() {
   cat <<EOT

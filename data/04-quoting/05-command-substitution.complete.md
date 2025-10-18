@@ -1,4 +1,4 @@
-### Command Substitution in Strings
+## Command Substitution in Strings
 
 Use double quotes when including command substitution:
 

@@ -1,4 +1,4 @@
-### Code Formatting
+## Code Formatting
 
 #### Indentation
 - !! Use 2 spaces for indentation (NOT tabs)

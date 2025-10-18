@@ -1,4 +1,4 @@
-### Shebang and Initial Setup
+## Shebang and Initial Setup
 First lines of all scripts must include a `#!shebang`, global `#shellcheck` definitions (optional), a brief description of the script, and first command `set -euo pipefail`.
 
 ```bash

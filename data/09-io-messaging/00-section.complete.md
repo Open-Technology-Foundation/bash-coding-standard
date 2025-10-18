@@ -1,3 +1,3 @@
-## Input/Output & Messaging
+# Input/Output & Messaging
 
 This section establishes standardized messaging patterns with color support for terminal output and proper stream handling. It defines the complete messaging suite: `_msg()` (core function using FUNCNAME), `vecho()` (verbose output), `success()` (success messages), `warn()` (warnings), `info()` (informational), `debug()` (debug output), `error()` (unconditional error to stderr), `die()` (exit with error), and `yn()` (yes/no prompts). It explains STDOUT vs STDERR separation (data vs diagnostics), proper usage documentation patterns, and when to use messaging functions versus bare echo statements. Error output must always go to STDERR with `>&2` placed at the beginning of commands for clarity.

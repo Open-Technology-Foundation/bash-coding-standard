@@ -1,4 +1,4 @@
-### Trap Handling
+## Trap Handling
 
 **Standard cleanup pattern:**
 

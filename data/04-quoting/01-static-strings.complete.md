@@ -1,4 +1,4 @@
-### Static Strings and Constants
+## Static Strings and Constants
 
 **Always use single quotes for string literals that contain no variables:**
 

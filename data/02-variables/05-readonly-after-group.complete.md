@@ -1,4 +1,4 @@
-### Readonly After Group
+## Readonly After Group
 
 **When declaring multiple readonly variables, always declare them first with their values, then make them all readonly in a single statement. This pattern improves readability, prevents assignment errors, and makes the immutability contract explicit and visible.**
 

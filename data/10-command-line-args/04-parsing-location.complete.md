@@ -1,4 +1,4 @@
-### Argument Parsing Location
+## Argument Parsing Location
 
 **Recommendation:** Place argument parsing inside the \`main()\` function rather than at the top level.
 

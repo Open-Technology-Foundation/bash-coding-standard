@@ -1,4 +1,4 @@
-### Dry-Run Pattern
+## Dry-Run Pattern
 
 Implement preview mode for operations that modify system state, allowing users to see what would happen without making actual changes.
 

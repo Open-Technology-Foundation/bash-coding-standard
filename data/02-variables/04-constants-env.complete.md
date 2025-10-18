@@ -1,4 +1,4 @@
-### Constants and Environment Variables
+## Constants and Environment Variables
 
 **Constants (readonly):**
 ```bash

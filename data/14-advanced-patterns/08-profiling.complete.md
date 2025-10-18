@@ -1,4 +1,4 @@
-### Performance Profiling
+## Performance Profiling
 
 Simple performance measurement patterns.
 

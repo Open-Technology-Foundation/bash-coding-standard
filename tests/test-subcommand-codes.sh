@@ -81,17 +81,6 @@ test_codes_help() {
   assert_contains "$output" "BCS" "Help explains BCS codes"
 }
 
-test_codes_alias() {
-  test_section "Codes Alias Tests"
-
-  # Test list-codes alias
-  local -- output1 output2
-  output1=$("$SCRIPT" codes 2>&1)
-  output2=$("$SCRIPT" list-codes 2>&1)
-
-  assert_equals "$output1" "$output2" "codes and list-codes produce same output"
-}
-
 test_codes_with_missing_data() {
   test_section "Codes Error Handling Tests"
 
@@ -106,7 +95,6 @@ test_codes_format
 test_codes_count
 test_codes_sorting
 test_codes_help
-test_codes_alias
 test_codes_with_missing_data
 
 print_summary

@@ -1,4 +1,4 @@
-### Loops
+## Loops
 
 **Use loops to iterate over collections, process command output, or repeat operations. Bash provides `for`, `while`, and `until` loops, each suited to different iteration patterns. Always prefer array iteration over string parsing, use process substitution to avoid subshell issues, and employ proper loop control with `break` and `continue` for early exits and conditional skipping.**
 

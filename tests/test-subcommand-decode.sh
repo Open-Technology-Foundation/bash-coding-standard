@@ -36,9 +36,9 @@ test_decode_basic() {
   local -- output
   output=$("$SCRIPT" decode BCS010201 2>&1)
 
-  # Should return a file path
+  # Should return a file path (default tier determined by BASH-CODING-STANDARD.md symlink)
   assert_contains "$output" "data/" "Output contains data/ directory"
-  assert_contains "$output" ".complete.md" "Output contains complete tier file"
+  assert_contains "$output" ".abstract.md" "Output contains abstract tier file (default from symlink)"
   assert_contains "$output" "01-script-structure" "Output contains correct section"
   assert_contains "$output" "02-shebang" "Output contains correct rule"
   assert_contains "$output" "01-dual-purpose" "Output contains correct subrule"
@@ -133,8 +133,8 @@ test_decode_basename() {
     pass "Basename contains no directory separator"
   fi
 
-  # Should still have the correct filename
-  assert_equals "$output" "02-shebang.complete.md" "Basename shows correct filename"
+  # Should still have the correct filename (default tier determined by symlink)
+  assert_equals "$output" "02-shebang.abstract.md" "Basename shows correct filename (abstract tier from symlink)"
 }
 
 test_decode_exists() {
@@ -177,8 +177,8 @@ test_decode_section_code() {
   local -- output
   output=$("$SCRIPT" decode BCS0100 2>&1)
 
-  # Should decode to section file
-  assert_contains "$output" "00-section.complete.md" "Section code decodes to section file"
+  # Should decode to section file (default tier determined by symlink)
+  assert_contains "$output" "00-section.abstract.md" "Section code decodes to section file (abstract tier from symlink)"
   assert_contains "$output" "01-script-structure" "Contains correct section directory"
 }
 
@@ -189,8 +189,8 @@ test_decode_subrule_code() {
   local -- output
   output=$("$SCRIPT" decode BCS010201 2>&1)
 
-  # Should decode to subrule file
-  assert_contains "$output" "01-dual-purpose.complete.md" "Subrule code decodes to subrule file"
+  # Should decode to subrule file (default tier determined by symlink)
+  assert_contains "$output" "01-dual-purpose.abstract.md" "Subrule code decodes to subrule file (abstract tier from symlink)"
   assert_contains "$output" "02-shebang" "Contains rule directory"
 }
 
@@ -203,7 +203,7 @@ test_decode_invalid_code() {
 
   # Should return error for non-existent code
   assert_not_zero "$exit_code" "Invalid code returns error"
-  assert_contains "$output" "error" "Error message for invalid code"
+  assert_contains "$output" "✗" "Error message for invalid code"
   assert_contains "$output" "not found" "Error indicates code not found"
 }
 
@@ -216,19 +216,9 @@ test_decode_missing_code() {
 
   # Should return error when no code specified
   assert_not_zero "$exit_code" "Missing code returns error"
-  assert_contains "$output" "error" "Error message when code missing"
+  assert_contains "$output" "✗" "Error message when code missing"
 }
 
-test_decode_alias() {
-  test_section "Decode Alias Tests"
-
-  # Test resolve alias
-  local -- output1 output2
-  output1=$("$SCRIPT" decode BCS0102 2>&1)
-  output2=$("$SCRIPT" resolve BCS0102 2>&1)
-
-  assert_equals "$output1" "$output2" "decode and resolve produce same output"
-}
 
 test_decode_combination_all_relative() {
   test_section "Decode Combination Tests: --all --relative"
@@ -385,7 +375,6 @@ test_decode_section_code
 test_decode_subrule_code
 test_decode_invalid_code
 test_decode_missing_code
-test_decode_alias
 test_decode_combination_all_relative
 test_decode_combination_all_basename
 test_decode_print_basic

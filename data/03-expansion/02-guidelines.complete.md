@@ -1,4 +1,4 @@
-### Variable Expansion Guidelines
+## Variable Expansion Guidelines
 
 **General Rule:** Always quote variables with `"$var"` as the default form. Only use braces `"${var}"` when syntactically necessary.
 

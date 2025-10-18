@@ -1,4 +1,4 @@
-### Development Practices
+## Development Practices
 
 #### ShellCheck Compliance
 ShellCheck is **compulsory** for all scripts. Use \`#shellcheck disable=...\` only for documented exceptions.
