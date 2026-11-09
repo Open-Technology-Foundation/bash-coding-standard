@@ -119,7 +119,7 @@ the remaining builtin substitutions listed above.
 
 **Tier:** core
 
-ShellCheck compliance is compulsory. Use `#shellcheck disable=SCxxxx` only for documented exceptions, and `#bcscheck disable=BCSxxxx` likewise to suppress a specific BCS rule. *Documented* means the directive carries its reason: a comment after the directive on the same line, or on the line directly above it, saying why the warning does not apply here. A bare directive with no reason is a finding under this rule, whatever it suppresses.
+ShellCheck compliance is compulsory. Use `#shellcheck disable=SCxxxx` only for documented exceptions, and `#bcscheck disable=BCSxxxx` likewise to suppress a specific BCS rule. *Documented* means the directive carries its reason: a comment after the directive on the same line, or on the line directly above it, saying why the warning does not apply here, or why it is accepted. A bare directive with no reason is a finding under this rule, whatever it suppresses.
 
 Suppression scope follows ShellCheck conventions — the directive covers the **next command**, which may be a single line or a brace/block group:
 
@@ -135,8 +135,8 @@ case $opt in
   -P|-N|--no-prompt) PROMPT=0 ;;
 esac
 
-# correct — documented shellcheck exception
-#shellcheck disable=SC2155  # exit-on-error catches realpath failure
+# correct — documented shellcheck exception (here an accepted one)
+#shellcheck disable=SC2155  # accepted: declare masks realpath's exit status (BCS0103)
 declare -r SCRIPT_PATH=$(realpath -- "$0")
 
 # wrong — bare directive: nothing says why the warning does not apply

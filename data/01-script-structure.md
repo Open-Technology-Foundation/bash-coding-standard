@@ -72,17 +72,21 @@ Standard metavars are VERSION, SCRIPT_PATH, SCRIPT_DIR, SCRIPT_NAME. Not all scr
 ```bash
 # correct — handles every install pattern, including symlinked wrappers
 declare -r VERSION=1.0.0
-#shellcheck disable=SC2155  # exit-on-error catches realpath failure
+#shellcheck disable=SC2155  # accepted: declare masks realpath's exit status (BCS0103)
 declare -r SCRIPT_PATH=$(realpath -- "$0")
 declare -r SCRIPT_DIR=${SCRIPT_PATH%/*} SCRIPT_NAME=${SCRIPT_PATH##*/}
 
-# wrong — readlink, separate readonly
-#shellcheck disable=SC2155  # exit-on-error catches realpath failure
-SCRIPT_PATH=$(readlink -f "$0")
-readonly SCRIPT_PATH
+# also correct — checked form: a plain assignment carries realpath's status, so errexit stops here
+declare -- SCRIPT_PATH
+SCRIPT_PATH=$(realpath -- "$0")
+declare -r SCRIPT_PATH
+
+# wrong — readlink where realpath is the standard
+#shellcheck disable=SC2155  # accepted: declare masks readlink's exit status (BCS0103)
+declare -r SCRIPT_PATH=$(readlink -f -- "$0")
 ```
 
-Use `#shellcheck disable=SC2155` before the `SCRIPT_PATH` line. The failure mode (command doesn't exist) should cause immediate termination anyway.
+Use `#shellcheck disable=SC2155` before the `SCRIPT_PATH` line, with its reason (BCS1206). The one-line form is an accepted trade, not a safe one. `declare` returns its own status, so when `realpath` fails the script does **not** stop: `set -e` and `inherit_errexit` see a successful `declare`, and `SCRIPT_PATH`, `SCRIPT_DIR` and `SCRIPT_NAME` are left readonly and empty. The trade is accepted because `realpath -- "$0"` fails only when `realpath` itself cannot be run or a directory named in `$0` no longer exists, and the usual cost is an empty name in messages. Use the checked form where an empty `SCRIPT_DIR` would do harm (it locates files to source, write or remove). Neither form is a finding.
 
 ## BCS0104 FHS Compliance
 

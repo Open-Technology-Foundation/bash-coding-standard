@@ -23,7 +23,7 @@ declare -rx PATH="$HOME"/.local/bin:/usr/local/bin:/usr/bin:/bin
 ### VERSION managed by version
 declare -r VERSION=2.0.8
 ###
-#shellcheck disable=SC2155  # exit-on-error catches realpath failure
+#shellcheck disable=SC2155  # accepted: declare masks realpath's exit status (BCS0103)
 declare -r SCRIPT_PATH=$(realpath -- "$0")
 declare -r SCRIPT_DIR=${SCRIPT_PATH%/*} SCRIPT_NAME=${SCRIPT_PATH##*/}
 

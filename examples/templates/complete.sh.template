@@ -7,7 +7,7 @@ declare -rx PATH="$HOME"/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 # --- Script Metadata ---
 declare -r VERSION='{{VERSION}}'
-#shellcheck disable=SC2155  # exit-on-error catches realpath failure
+#shellcheck disable=SC2155  # accepted: declare masks realpath's exit status (BCS0103)
 declare -r SCRIPT_PATH=$(realpath -- "$0")
 #shellcheck disable=SC2034  # SCRIPT_DIR is scaffolding; may be unused in a fresh script
 declare -r SCRIPT_DIR=${SCRIPT_PATH%/*} SCRIPT_NAME=${SCRIPT_PATH##*/}

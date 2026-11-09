@@ -10,7 +10,7 @@ shopt -s inherit_errexit extglob nullglob
 declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
 declare -r VERSION=1.1.0
-#shellcheck disable=SC2155  # exit-on-error catches realpath failures
+#shellcheck disable=SC2155  # accepted: declare masks realpath's exit status (BCS0103)
 declare -r SCRIPT_PATH=$(realpath -- "$0")
 declare -r SCRIPT_NAME=${SCRIPT_PATH##*/}
 

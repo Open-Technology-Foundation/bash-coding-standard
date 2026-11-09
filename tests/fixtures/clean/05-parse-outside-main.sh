@@ -5,7 +5,7 @@ shopt -s inherit_errexit
 declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
 declare -r VERSION=0.4.1
-#shellcheck disable=SC2155  # exit-on-error catches realpath failure
+#shellcheck disable=SC2155  # accepted: declare masks realpath's exit status (BCS0103)
 declare -r SCRIPT_PATH=$(realpath -- "$0")
 declare -r SCRIPT_NAME=${SCRIPT_PATH##*/}
 
