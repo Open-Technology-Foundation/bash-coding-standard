@@ -35,7 +35,7 @@ Conversational personas loaded on demand. Agents are discursive -- they hold sta
 
 ```yaml
 ---
-name: bcs-auditor
+name: shellcheck-fixer
 description: |
   One-paragraph trigger description with example user prompts...
 color: cyan
@@ -71,17 +71,17 @@ End-to-end flow for "write a new deployment script":
 # 2. Open the generated deploy file and fill in main() with your rsync/ssh logic.
 #    The scaffold already has strict mode, metadata, and the 13-step skeleton.
 
-# 3. Run the BCS auditor
-/bcs-audit deploy
+# 3. Check it against the standard, in-session (the bcscheck skill)
+bcscheck deploy
 
 # 4. If shellcheck warnings surface, hand them to the dedicated fixer
 /fix-shellcheck deploy
 
 # 5. Re-check, then commit
-/bcs-audit deploy
+bcscheck deploy
 ```
 
-Each slash command delegates to `bcscheck`, `bcs template`, or `shellcheck` under the hood -- you stay in the AI session, the tooling stays honest, and the BCS rules travel with every step.
+The slash commands delegate to `bcs template` and `shellcheck` under the hood, and the `bcscheck` skill reads the standard itself -- you stay in the AI session, the tooling stays honest, and the BCS rules travel with every step.
 
 ## Installation
 

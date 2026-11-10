@@ -102,12 +102,10 @@ uninstall:
 	rm -rf $(DESTDIR)$(SHAREDIR)
 	rm -f $(DESTDIR)$(PREFIX)/share/yatti/bash-coding-standard
 
-# Enterprise install set, as source:destination pairs. The bcs-audit skill is
-# self-contained, so no bcs-audit command is installed beside it (one entry
-# point per function). Single source of truth for install-claude/check-claude.
+# Enterprise install set, as source:destination pairs (one entry point per
+# function). Single source of truth for install-claude/check-claude.
 CLAUDE_FILES = \
   skills/bcscheck/SKILL.md:$(SKILLDIR)/bcscheck/SKILL.md \
-  skills/bcs-audit/SKILL.md:$(SKILLDIR)/bcs-audit/SKILL.md \
   ai-agents/commands/audit-bash.md:$(CMDDIR)/audit-bash.md
 
 install-claude:
@@ -115,7 +113,7 @@ install-claude:
 	  src=$(srcdir)$${pair%%:*}; dst=$(DESTDIR)$${pair#*:}; \
 	  install -d "$${dst%/*}" && install -m 644 "$$src" "$$dst" || exit 1; \
 	done
-	@echo 'Installed Claude skills (bcscheck, bcs-audit) and command (audit-bash)'
+	@echo 'Installed Claude skill (bcscheck) and command (audit-bash)'
 
 # Compare the repo with the deployed copies. A deployed file that differs was
 # edited in place: install-claude would silently revert that edit, so port it
@@ -131,6 +129,8 @@ check-claude:
 	done; \
 	exit $$rc
 
+# bcs-audit is no longer shipped; releases up to 2.0.9 installed it, so it is
+# still removed here.
 uninstall-claude:
 	rm -rf $(DESTDIR)$(SKILLDIR)/bcscheck $(DESTDIR)$(SKILLDIR)/bcs-audit
 	rm -f $(DESTDIR)$(CMDDIR)/bcs-audit.md $(DESTDIR)$(CMDDIR)/audit-bash.md

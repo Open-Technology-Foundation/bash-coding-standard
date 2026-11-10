@@ -42,7 +42,6 @@ ln -s "$PWD"/ai-agents/rules/*    ~/.claude/rules/
 ## Agents Index
 
 - `bash-expert.md` -- Bash script analysis, optimization, and BCS-compliant development
-- `bcs-auditor.md` -- Run `bcscheck` and interpret BCS compliance findings by severity
 - `documentation-writer.md` -- Generate comprehensive documentation for code, projects, or systems
 - `script-scaffolder.md` -- Scaffold new BCS-compliant scripts via `bcs template`
 - `shellcheck-fixer.md` -- Fix SC#### warnings using BCS-compliant remediation patterns
@@ -50,7 +49,6 @@ ln -s "$PWD"/ai-agents/rules/*    ~/.claude/rules/
 ## Commands Index
 
 - `audit-bash.md` -- `/audit-bash` -- BCS compliance auditing for Bash codebases
-- `bcs-audit.md` -- `/bcs-audit` -- Parallel shellcheck + bcscheck audit with severity-tagged findings
 - `bcs-codes.md` -- `/bcs-codes` -- List BCS rule codes, optionally filtered by section or keyword
 - `fix-shellcheck.md` -- `/fix-shellcheck` -- Fix SC#### warnings per BCS remediation patterns
 - `purpose-functionality-usage.md` -- `/pfu` -- Determine purpose and usage of a script or codebase

@@ -34,10 +34,8 @@ declare -a CLAUDE_DIRS=(SKILLDIR="$SKILLS" CMDDIR="$CMDS")
 begin_test 'install-claude install set'
 run_make -n install-claude "${CLAUDE_DIRS[@]}"
 assert_contains "$OUT" 'skills/bcscheck/SKILL.md' 'installs the bcscheck skill' ||:
-assert_contains "$OUT" 'skills/bcs-audit/SKILL.md' 'installs the bcs-audit skill' ||:
 assert_contains "$OUT" 'commands/audit-bash.md' 'installs the audit-bash command' ||:
-assert_not_contains "$OUT" 'commands/bcs-audit.md' \
-  'does not install a bcs-audit command beside the self-contained skill' ||:
+assert_not_contains "$OUT" 'bcs-audit' 'installs no bcs-audit skill or command' ||:
 
 begin_test 'check-claude: nothing installed'
 run_make check-claude "${CLAUDE_DIRS[@]}"
@@ -51,14 +49,20 @@ run_make check-claude "${CLAUDE_DIRS[@]}"
 assert_equal 0 "$RC" 'fresh install -> clean' ||:
 
 begin_test 'check-claude: deployed copy edited by hand'
-echo 'hand edit' >> "$SKILLS"/bcs-audit/SKILL.md
+echo 'hand edit' >> "$SKILLS"/bcscheck/SKILL.md
 run_make check-claude "${CLAUDE_DIRS[@]}"
 assert_equal 1 "$((RC != 0))" 'edited deployed skill -> non-zero' ||:
-assert_contains "$OUT" 'bcs-audit/SKILL.md' 'edited deployed skill -> named' ||:
+# check-claude prints every path in every state, so match the verdict too.
+assert_contains "$OUT" 'bcscheck/SKILL.md: DIFFERS' 'edited deployed skill -> named as differing' ||:
+assert_contains "$OUT" 'audit-bash.md: OK' 'the untouched file is still reported clean' ||:
 
-begin_test 'skills are self-contained'
-assert_equal 0 "$(grep -c 'commands/bcs-audit.md' "$PROJECT_DIR"/skills/bcs-audit/SKILL.md ||:)" \
-  'bcs-audit skill does not point at an uninstalled command file' ||:
+# The bcs-audit skill is no longer shipped, but earlier releases installed it.
+begin_test 'uninstall-claude still clears a bcs-audit left by an earlier release'
+run_make -n uninstall-claude "${CLAUDE_DIRS[@]}"
+assert_contains "$OUT" "$SKILLS/bcs-audit" 'legacy skill directory is removed' ||:
+assert_contains "$OUT" "$CMDS/bcs-audit.md" 'legacy command file is removed' ||:
+
+begin_test 'audit-bash routes to the skill'
 # Backticks are literal Markdown here, not a command substitution.
 #shellcheck disable=SC2016
 assert_contains "$(< "$PROJECT_DIR"/ai-agents/commands/audit-bash.md)" \
