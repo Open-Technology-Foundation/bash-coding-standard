@@ -1641,12 +1641,14 @@ cmd_template() {
       && ! _bytes_match "$value" '*{{@(NAME|DESCRIPTION|VERSION)}}*' \
       || die 22 "Template value ${value@Q} must not contain a control character or a placeholder"
   done
+
   # Outside the library template NAME sits inside single quotes, and so does
   # VERSION wherever a template uses it.
   ! _bytes_match "$script_name" "*'*" \
     || die 22 "Script name ${script_name@Q} must not contain a single quote"
   [[ $content != *'{{VERSION}}'* ]] || ! _bytes_match "$version" "*'*" \
     || die 22 "Version ${version@Q} must not contain a single quote"
+
   # DESCRIPTION is inert in a comment line. Where a template also writes it
   # into text the shell expands (the unquoted help heredoc of `complete`), it
   # may hold nothing that is live there: no backquote; no $ unless a space or
