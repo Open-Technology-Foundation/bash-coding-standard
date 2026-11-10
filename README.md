@@ -75,7 +75,7 @@ Installs the `bcs` CLI plus per-subcommand shims (`bcscheck`, `bcsdisplay`, `bcs
 | OpenAI API | `OPENAI_API_KEY` + `curl` + `jq` |
 | Google Gemini API | `GOOGLE_API_KEY` + `curl` + `jq` |
 | Ollama (local or cloud) | Running Ollama server |
-| Claude Code CLI | `claude` installed on `PATH` |
+| Claude Code CLI | `claude` installed on `PATH` (plus `jq` for `--json`) |
 
 See [Compliance Checking](#compliance-checking) for backend trade-offs.
 
@@ -246,7 +246,7 @@ raised none. Keep `low` for short scripts; never gate a build on it. Numbers:
 | Pre-commit review | `-m sonnet -e high` |
 | Thorough audit | `-m sonnet -e max` |
 | Pre-release audit | `-m opus -e max` |
-| No API key, Claude plan only | `-m claude-code:opus` (`-e` has no effect on this backend) |
+| No API key, Claude plan only | `-m claude-code:opus` (`-e` has no effect on this backend; a run is cut off after 10 minutes) |
 
 **Filtering, CI gates, suppression**
 

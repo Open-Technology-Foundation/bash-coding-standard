@@ -106,6 +106,20 @@ declare -- noarg_count
 noarg_count=$(grep -c 'noarg()' "$BCS_CMD" || true)
 assert_gt "$noarg_count" 0 'has noarg() function' || true
 
+# Test: parsed flags are frozen once the parse loop is done (BCS0403)
+begin_test 'bcs freezes its parsed flags'
+declare -- readonly_count
+readonly_count=$(grep -c -E '^  readonly [A-Za-z_ ]+$' "$BCS_CMD" || true)
+assert_gt "$readonly_count" 4 'a readonly line follows each subcommand parse loop' || true
+
+# Test: a sourcing suite keeps its own PATH (BCS1002: only the executable sets it)
+begin_test 'sourcing bcs leaves the caller PATH alone'
+declare -- path_state
+#shellcheck disable=SC2016  # $PATH and $1 are for the inner bash, not this shell
+path_state=$(bash -c 'before=$PATH; source "$1"; [[ $PATH == "$before" ]] && PATH=$PATH && echo untouched' \
+  _ "$BCS_CMD" 2>/dev/null || echo changed)
+assert_equal untouched "$path_state" 'PATH neither replaced nor made readonly' || true
+
 # Test: line count is reasonable
 begin_test 'bcs line count is reasonable'
 declare -i bcs_lines

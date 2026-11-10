@@ -263,7 +263,12 @@ text directly (not JSON), so for that backend the dump holds the CLI's
 standard error (an authentication or quota failure shows up there); with
 .BR \-\-json ,
 an invalid response is still preserved in the dump file. A CLI that exits
-non-zero is reported as exit 5, never as exit 1.
+non-zero is reported as exit 5, never as exit 1. A CLI run is cut off after
+600 seconds and reported the same way; with
+.BR \-\-json ,
+this backend needs
+.B jq
+as the API backends do.
 .PP
 Inline suppression:
 .B #bcscheck disable=BCS\fIxxxx\fR

@@ -5,13 +5,16 @@
 # Verifies the _run_shellcheck and _render_shellcheck_block helpers and
 # that cmd_check's --shellcheck / --no-shellcheck flags parse cleanly.
 #
-# NOTE: sourcing bcs marks PATH readonly (declare -rx PATH=... at bcs:9),
+# NOTE: PATH is readonly here (set below, to the value an executed bcs uses),
 # so we cannot test the "binary missing" path by manipulating PATH.
 # Instead we override the `command` and `shellcheck` builtins as functions,
 # following the pattern in test-detect-backend.sh.
 
 set -euo pipefail
 shopt -s inherit_errexit
+# bcs is sourced below and leaves PATH to its caller (BCS1002), so the suite
+# sets the value an executed bcs would.
+declare -rx PATH=~/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 #shellcheck source=tests/test-helpers.sh
 source "$(dirname "$0")"/test-helpers.sh

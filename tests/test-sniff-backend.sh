@@ -9,6 +9,9 @@
 
 set -euo pipefail
 shopt -s inherit_errexit
+# bcs is sourced below and leaves PATH to its caller (BCS1002), so the suite
+# sets the value an executed bcs would.
+declare -rx PATH=~/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 #shellcheck source=tests/test-helpers.sh
 source "$(dirname "$0")"/test-helpers.sh

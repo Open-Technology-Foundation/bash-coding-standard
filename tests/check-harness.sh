@@ -12,6 +12,7 @@
 #   MOCK_CLI_OUTPUT / MOCK_CLI_STDERR / MOCK_CLI_RC   what the claude mock does
 #   PAYLOAD_FILE      request body of the last curl call
 #   CLI_ARGV_FILE     argv of the last claude call, one argument per line
+#   TIMEOUT_ARGV_FILE argv of the last timeout call, one argument per line
 #   CLI_STANDARD_FILE copy of the standard the last claude call was pointed at
 #   CLI_SCRIPT_FILE   copy of the script the last claude call was pointed at
 #   PRE_HOOK          command run inside the check subshell before cmd_check
@@ -41,6 +42,7 @@ declare -x XDG_CACHE_HOME="$SANDBOX"/cache XDG_STATE_HOME="$SANDBOX"/state \
            XDG_CONFIG_HOME="$SANDBOX"/config BCS_CONF_DIR="$SANDBOX"/conf
 mkdir -p "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_CONFIG_HOME" "$BCS_CONF_DIR"
 declare -rx PAYLOAD_FILE="$SANDBOX"/payload.json CLI_ARGV_FILE="$SANDBOX"/cli-argv.txt \
+            TIMEOUT_ARGV_FILE="$SANDBOX"/timeout-argv.txt \
             CLI_STANDARD_FILE="$SANDBOX"/cli-standard.md \
             CLI_SCRIPT_FILE="$SANDBOX"/cli-script.sh
 unset BCS_MODEL BCS_EFFORT BCS_STRICT BCS_JSON BCS_CACHE BCS_TIER BCS_MIN_TIER \
@@ -74,7 +76,18 @@ claude() {
   [[ -z $MOCK_CLI_OUTPUT ]] || echo "$MOCK_CLI_OUTPUT"
   return "$MOCK_CLI_RC"
 }
-declare -fx curl claude
+
+# Mock timeout: bcs wraps the CLI in timeout(1), which execs a binary and so
+# cannot run the claude function above -- on a machine with the CLI installed
+# it would start the real one. Keep argv, skip the options and the duration,
+# then run the command in-process. Expiry is simulated with MOCK_CLI_RC=124.
+timeout() {
+  printf '%s\n' "$@" > "$TIMEOUT_ARGV_FILE"
+  while [[ ${1:-} == -* ]]; do shift; done
+  shift
+  "$@"
+}
+declare -fx curl claude timeout
 
 # run_check BODY [cmd_check args...]
 # cmd_check runs in a subshell because die() exits. The subshell is a
@@ -88,6 +101,7 @@ run_check() {
   RC=0
   : > "$PAYLOAD_FILE"
   : > "$CLI_ARGV_FILE"
+  : > "$TIMEOUT_ARGV_FILE"
   : > "$CLI_STANDARD_FILE"
   : > "$CLI_SCRIPT_FILE"
   ( "$PRE_HOOK"; cmd_check --no-shellcheck "$@" "$CHECK_TARGET" ) \

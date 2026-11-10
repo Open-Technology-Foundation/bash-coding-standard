@@ -8,6 +8,9 @@
 
 set -euo pipefail
 shopt -s inherit_errexit
+# bcs is sourced below and leaves PATH to its caller (BCS1002), so the suite
+# sets the value an executed bcs would.
+declare -rx PATH=~/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 #shellcheck source=tests/test-helpers.sh
 source "$(dirname "$0")"/test-helpers.sh
@@ -195,6 +198,23 @@ else
     printf '  %s✗%s 706 died but wrong message: %s\n' "$RED" "$NC" "$err"
   fi
 fi
+
+# The file is sourced as shell. If its mode cannot be read, the permission
+# policy above cannot be applied, so the file must not be sourced at all.
+begin_test 'unreadable mode: file is not sourced'
+: > "$SYS_CONF"
+cat > "$USR_CONF" <<'CONF'
+BCS_TEST_UNVERIFIED=sourced
+CONF
+chmod -- 600 "$USR_CONF"
+err=$(
+  #shellcheck disable=SC2329  # called by read_conf, which shells out to stat
+  stat() { return 1; }
+  read_conf 2>&1 1>/dev/null ||:
+  echo "var=${BCS_TEST_UNVERIFIED:-unset}"
+)
+assert_contains "$err" 'var=unset' 'stat failure -> conf file not sourced' ||:
+assert_contains "$err" 'cannot read its mode' 'stat failure -> the user is told why' ||:
 
 # Reset to known-good mode at end so trap cleanup is quiet.
 chmod 600 "$USR_CONF" 2>/dev/null ||:

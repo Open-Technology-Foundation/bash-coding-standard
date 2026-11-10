@@ -17,7 +17,9 @@ set -euo pipefail
 #bcscheck disable=BCS0406  # sourced by the test suites, as above
 shopt -s inherit_errexit extglob nullglob
 
-declare -rx PATH="$HOME"/.local/bin:/usr/local/bin:/usr/bin:/bin
+# PATH is hardened when bcs is executed. A suite that sources it keeps its own
+# (BCS1002: assigning PATH inside a sourced file replaces the caller's).
+[[ ${BASH_SOURCE[0]} != "$0" ]] || declare -rx PATH="$HOME"/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 # Script metadata
 ### VERSION managed by version
@@ -78,6 +80,9 @@ declare -A MODEL_ALIASES=(
 declare -A EFFORT_TOKENS=([low]=4000 [medium]=8000 [high]=24000 [xhigh]=40000 [max]=64000)
 declare -A EFFORT_THINKING=([low]=0  [medium]=2000 [high]=6000  [xhigh]=12000 [max]=16000)
 declare -A EFFORT_REASONING=([low]=minimal [medium]=low [high]=medium [xhigh]=high [max]=high)
+# Ceiling in seconds for one Claude Code CLI run; the curl backends carry
+# their own --max-time (300, and 600 for Ollama).
+declare -ri CLI_TIMEOUT=600
 
 # Text-mode answer contract. CLEAN_LINE is what both prompt builders tell the
 # model to print for a compliant script, so that an empty answer is always an
@@ -162,10 +167,14 @@ read_conf() {
     #   - owner-only      -> silent
     # Octal digit without write bit: 0, 1, 4, 5. With write bit: 2, 3, 6, 7.
     # The ?([0-7]) prefix handles modes with setuid/setgid/sticky bits (e.g. 4755).
-    mode=$(stat -c '%a' -- "$conf_file" 2>/dev/null) ||:
+    # A mode that cannot be read cannot be judged, so fail closed: skip the
+    # file rather than source it unverified. 2>/dev/null: the warning says
+    # what happened; stat's own message would add nothing.
+    mode=$(stat -c '%a' -- "$conf_file" 2>/dev/null) \
+      || { warn "${conf_file@Q}: cannot read its mode -- not sourced"; continue; }
     case $mode in
-      ''|?([0-7])[0-7][0145][0145])
-        : ;; # stat failed, or safe perms
+      ?([0-7])[0-7][0145][0145])
+        : ;; # safe perms
       ?([0-7])[0-7][0-7][2367])
         die 13 "$conf_file: world-writable (mode $mode) -- refusing to source as" \
                 "shell; run: chmod o-w ${conf_file@Q}" ;;
@@ -857,6 +866,7 @@ _render_json_output() {
   local -- strict_bool tier_map
   ((strict)) && strict_bool=true || strict_bool=false
   tier_map=$(_tier_map_json "$arr")
+  # $rank has the same ordering as _tier_rank; VALID_TIERS holds no fourth.
   jq -n \
     --arg tool 'bcs' \
     --arg version "$VERSION" \
@@ -870,7 +880,6 @@ _render_json_output() {
     --argjson tiers "$tier_map" \
     --arg want "$want" \
     --argjson min_rank "$min_rank" \
-    `# same ordering as _tier_rank; VALID_TIERS holds no fourth` \
     --argjson rank '{"core": 3, "recommended": 2, "style": 1}' \
     '{source: "bcs",
       meta: {tool: $tool, version: $version, file: $file, backend: $backend,
@@ -998,6 +1007,7 @@ _llm_anthropic() {
             '{type: "enabled", budget_tokens: $b}') \
             || die 1 'Failed to build thinking payload'
         fi ;;
+    *)  : ;;   # unprobed model: no thinking field, rather than a guess
   esac
 
   # Anthropic Messages API has no native JSON-mode flag; rely on prompt
@@ -1039,6 +1049,7 @@ _llm_anthropic() {
   _dump_response "$body"
   if ! ((http_code >= 200 && http_code < 300)); then
     local -- errmsg
+    # Best-effort detail: an error body need not be JSON, and the status is reported anyway.
     errmsg=$(jq -r '.error.message // empty' <<< "$body" 2>/dev/null) ||:
     die 5 "Anthropic API error (HTTP $http_code)" ${errmsg:+"$errmsg"}
   fi
@@ -1116,12 +1127,14 @@ _llm_ollama() {
   _dump_response "$body"
   if ! ((http_code >= 200 && http_code < 300)); then
     local -- errmsg
+    # Best-effort detail: an error body need not be JSON, and the status is reported anyway.
     errmsg=$(jq -r '.error // empty' <<< "$body" 2>/dev/null) ||:
     die 5 "Ollama API error (HTTP $http_code)" ${errmsg:+"$errmsg"}
   fi
 
   local -- content
-  content=$(jq -r '.message.content // empty' <<< "$body")
+  content=$(jq -r '.message.content // empty' <<< "$body") \
+    || die 5 'Failed to parse Ollama response'
   # Strip <think>...</think> tags from qwen3 models
   [[ $content != *'</think>'* ]] || { content=${content##*</think>}; content=${content#$'\n'}; }
   echo "$content"
@@ -1194,6 +1207,7 @@ _llm_openai() {
   _dump_response "$body"
   if ! ((http_code >= 200 && http_code < 300)); then
     local -- errmsg
+    # Best-effort detail: an error body need not be JSON, and the status is reported anyway.
     errmsg=$(jq -r '.error.message // empty' <<< "$body" 2>/dev/null) ||:
     die 5 "OpenAI API error (HTTP $http_code)" ${errmsg:+"$errmsg"}
   fi
@@ -1203,6 +1217,7 @@ _llm_openai() {
   local -- text
   text=$(jq -r '.choices[0].message.content // empty' <<< "$body") \
     || die 5 'Failed to parse OpenAI response'
+  # 2>/dev/null ||: the reason is a detail; failing to read it must not mask the error itself.
   [[ -n $text ]] || die 5 'OpenAI API returned no text content' \
     "finish_reason=$(jq -r '.choices[0].finish_reason // "unknown"' <<< "$body" 2>/dev/null ||:)"
   printf '%s\n' "$text"
@@ -1279,6 +1294,7 @@ _llm_google() {
   _dump_response "$body"
   if ! ((http_code >= 200 && http_code < 300)); then
     local -- errmsg
+    # Best-effort detail: an error body need not be JSON, and the status is reported anyway.
     errmsg=$(jq -r '.error.message // empty' <<< "$body" 2>/dev/null) ||:
     die 5 "Google API error (HTTP $http_code)" ${errmsg:+"$errmsg"}
   fi
@@ -1290,6 +1306,7 @@ _llm_google() {
   text=$(jq -r '[.candidates[0].content.parts[]? | select(.thought != true)
                  | .text // empty] | join("")' <<< "$body") \
     || die 5 'Failed to parse Google response'
+  # 2>/dev/null ||: the reason is a detail; failing to read it must not mask the error itself.
   [[ -n $text ]] || die 5 'Google API returned no text content' \
     "finishReason=$(jq -r '.candidates[0].finishReason
                            // .promptFeedback.blockReason
@@ -1309,13 +1326,13 @@ _llm_claude_cli() {
   local -- model=$1 effort=$2 bcs_file=$3 script_file=$4
   local -i strict=$5
   local -- tier_instr=${6:-} filter_instr=${7:-} policy_text=${8:-}
-  local -- shellcheck_block=${9:-}
+  local -- shellcheck_block=${9:-} check_dir=${10}
   command -v claude &>/dev/null || die 18 'Claude CLI required for claude backend'
 
-  # cd to clean temp dir -- prevents claude from loading local CLAUDE.md
-  local -- check_dir
-  check_dir=$(mktemp -d -t 'bcs-XXXXX') || die 1 'Failed to create temp dir'
-  _register_tmp "$check_dir"
+  # cd to a clean temp dir -- prevents claude from loading a local CLAUDE.md.
+  # The caller makes and registers that directory: this function runs inside
+  # $(...), a subshell where _register_tmp's array and main()'s EXIT net are
+  # out of reach, so a signal or a die in here would leave it behind.
   # Capture the return directory in a local and reference it from a
   # single-quoted trap (expanded at trap time, not definition time) so a
   # cwd path containing shell metacharacters cannot inject commands.
@@ -1442,14 +1459,19 @@ Respect inline suppression: eg, #bcscheck disable=BCS0101 exempts the next line/
   # SC1007: `CLAUDECODE= claude ...` clears the env var for one command;
   # the empty-RHS assignment is intentional, not a typo.
   local -i rc=0
+  # BCS1104: a remote call needs a ceiling. --foreground keeps timeout in this
+  # process group, so a terminal Ctrl-C still reaches the CLI; without it the
+  # CLI would be left running, orphaned.
   #shellcheck disable=SC1007  # CLAUDECODE= is deliberately empty: clears the nesting guard
-  CLAUDECODE= claude "${claude_args[@]}" -p "$prompt" 2>"$err_file" || rc=$?
+  CLAUDECODE= timeout --foreground --kill-after=10 "$CLI_TIMEOUT" \
+    claude "${claude_args[@]}" -p "$prompt" 2>"$err_file" || rc=$?
   ((rc)) || return 0
   # A failed CLI is a backend failure (5), never exit 1: callers read 1 as
   # "ERROR findings found". return, not die, so the RETURN trap still cleans up.
-  local -- err_tail=''
+  local -- err_tail='' what="failed (exit $rc)"
+  ((rc != 124)) || what="timed out after ${CLI_TIMEOUT}s"
   [[ ! -s $err_file ]] || err_tail=$(tail -n 5 -- "$err_file")
-  error "Claude Code CLI failed (exit $rc)" ${err_tail:+"$err_tail"}
+  error "Claude Code CLI $what" ${err_tail:+"$err_tail"}
   return 5
 }
 
@@ -1481,6 +1503,7 @@ cmd_display() {
     -*)           die 22 "Invalid option ${1@Q}" ;;
     *)            die 2 "Unexpected argument ${1@Q}" ;;
   esac; shift; done
+  readonly VERBOSE force_cat
 
   bcs_file=$(_find_bcs_md) || die 3 'BASH-CODING-STANDARD.md not found'
 
@@ -1536,6 +1559,7 @@ cmd_template() {
     -*)              die 22 "Invalid option ${1@Q}" ;;
     *)               die 2 "Unexpected argument ${1@Q}" ;;
   esac; shift; done
+  readonly VERBOSE template_type description version output_file make_executable force_overwrite
 
   # Determine script name from output file if not specified
   if [[ -z $script_name ]]; then
@@ -1597,6 +1621,14 @@ cmd_template() {
 
 cmd_check() {
   local -- script_file='' model=${BCS_MODEL:-sonnet} effort=${BCS_EFFORT:-medium}
+  # These flags come from the environment or bcs.conf and land in integer
+  # variables, where the value is evaluated as arithmetic: `true` would be an
+  # unbound variable, and a subscript such as 'x[$(cmd)]' would run cmd.
+  local -- flag
+  for flag in BCS_STRICT BCS_DEBUG BCS_JSON BCS_SHELLCHECK BCS_CACHE; do
+    [[ ${!flag:-0} =~ ^(0|[1-9][0-9]*)$ ]] \
+      || die 22 "Invalid $flag ${!flag@Q} (expected 0 or 1)"
+  done
   local -i strict=${BCS_STRICT:-0} debug=${BCS_DEBUG:-0} json_output=${BCS_JSON:-0}
   local -i shellcheck_ctx=${BCS_SHELLCHECK:-1}
   local -i use_cache=${BCS_CACHE:-1}
@@ -1629,7 +1661,8 @@ cmd_check() {
                     # Remaining args are operands; enforce the one-file rule
                     # here too rather than silently taking the first and
                     # dropping the rest (or overwriting an earlier operand).
-                    while [[ -n ${1:-} ]]; do
+                    # Count them: an empty operand must not end the scan.
+                    while (($#)); do
                       [[ -z $script_file ]] || die 2 'Only one script file allowed'
                       script_file=$1; shift
                     done
@@ -1640,6 +1673,7 @@ cmd_check() {
                     script_file=$1
                     ;;
   esac; shift; done
+  readonly VERBOSE strict debug json_output shellcheck_ctx use_cache tier_filter min_tier_filter
 
   # Recursion guard: _llm_claude_cli exports BCS_CHECK_ACTIVE to its child
   # claude session. A nested bcs check (agent shelling out to bcscheck, user
@@ -1716,16 +1750,16 @@ cmd_check() {
   backend=${backend:-$(_sniff_backend "$model")}
   info "Backend ${backend@Q} resolved from model ${model@Q}"
 
-  # Verify curl+jq+nl for API backends. `nl` produces the numbered-line
-  # user message; without it the API receives an empty prompt and returns
-  # confused output -- the failure surfaces at the API layer, not the
-  # actual cause.
-  if [[ $backend != claude ]]; then
-    local -- dep
-    for dep in curl jq nl; do
-      command -v "$dep" &>/dev/null || die 18 "Required tool: ${dep@Q}"
-    done
+  # curl and jq carry every API backend; jq also renders --json, on the CLI
+  # backend as well. nl is coreutils and needs no check (BCS0408).
+  local -- dep
+  local -a deps=()
+  if [[ $backend != claude ]]; then deps=(curl jq)
+  elif ((json_output)); then deps=(jq)
   fi
+  for dep in "${deps[@]}"; do
+    command -v "$dep" &>/dev/null || die 18 "Required tool: ${dep@Q}"
+  done
 
   # Find the standard document
   local -- bcs_file
@@ -1791,10 +1825,11 @@ cmd_check() {
   local -i cache_hit=0
   if ((use_cache)); then
     local -- cache_dir=${XDG_CACHE_HOME:-$HOME/.cache}/bcs cache_key=''
+    # A failed read would hash partial input: no key then, so no cache this run.
     cache_key=$({ printf '%s\n' "$VERSION" "$backend" "$model" "$effort" \
                     "$strict" "$json_output" "$tier_filter" "$min_tier_filter" \
                     "$policy_text" "$shellcheck_block"
-                  cat -- "$script_file" "$bcs_file"; } | sha256sum) ||:
+                  cat -- "$script_file" "$bcs_file"; } | sha256sum) || cache_key=''
     cache_key=${cache_key%% *}
     if [[ -n $cache_key ]]; then
       cache_file=$cache_dir/$cache_key
@@ -1817,8 +1852,14 @@ cmd_check() {
     # severity-based exit code is recomputed from content below as usual.
     result=$(< "$cache_file")
   elif [[ $backend == claude ]]; then
+    # Made and registered here, in the shell that owns the EXIT net: Ctrl-C
+    # during a CLI run used to leave the directory, and the script copy in it.
+    local -- cli_dir
+    cli_dir=$(mktemp -d -t 'bcs-XXXXX') || die 1 'Failed to create temp dir'
+    _register_tmp "$cli_dir"
     result=$(_llm_claude_cli "$model" "$effort" "$bcs_file" "$script_file" "$strict" \
-               "$tier_instr" "$filter_instr" "$policy_text" "$shellcheck_block") || exit_code=$?
+               "$tier_instr" "$filter_instr" "$policy_text" "$shellcheck_block" \
+               "$cli_dir") || exit_code=$?
   else
     # Build prompts for API backends
     local -- sys_prompt usr_prompt numbered_script effort_guidance
@@ -2052,17 +2093,13 @@ $numbered_script"
     dump_show=1
   fi
   if ((dump_show)); then
-    # Failure/-D diagnostics must surface even under -q (info is VERBOSE-gated),
-    # so force VERBOSE on for this block and restore it afterwards. The
-    # token/elapsed lines were already printed above unless -q hid them.
-    local -i _saved_verbose=$VERBOSE
-    VERBOSE=1
-    ((_saved_verbose)) || >&2 info "${diag_msgs[@]}"
-    >&2 info "Exit: $exit_code"
-    if [[ -s ${BCS_RESPONSE_DUMP:-} ]]; then
-      >&2 info "Raw response: $BCS_RESPONSE_DUMP"
-    fi
-    VERBOSE=$_saved_verbose
+    # Failure/-D diagnostics must surface even under -q, and info() is
+    # VERBOSE-gated: print through _msg rather than flip the flag (BCS1210).
+    # The token/elapsed lines were already printed above unless -q hid them.
+    local -- mark="$CYAN◉$NC"
+    ((VERBOSE)) || _msg "$mark" "${diag_msgs[@]}"
+    _msg "$mark" "Exit: $exit_code"
+    [[ ! -s ${BCS_RESPONSE_DUMP:-} ]] || _msg "$mark" "Raw response: $BCS_RESPONSE_DUMP"
   fi
   return "$exit_code"
 }
@@ -2091,6 +2128,7 @@ cmd_codes() {
     -*)            die 22 "Invalid option ${1@Q}" ;;
     *)             die 2 "Unexpected argument ${1@Q}" ;;
   esac; shift; done
+  readonly VERBOSE tier_filter explain_code show_tier include_disabled json_mode
 
   local -- data_dir
   data_dir=$(_find_data_dir) || die 3 'Data directory not found'
@@ -2156,6 +2194,8 @@ cmd_codes() {
         printf '%s %s\n' "$code" "$title"
       fi
     fi
+  # 2>/dev/null ||: as in _load_tiers -- a section file that vanished between
+  # the glob and the read lists no codes; the listing is of what is there.
   done < <(cat -- "${files[@]}" 2>/dev/null ||:)
 
   if ((json_mode)); then
@@ -2189,6 +2229,7 @@ cmd_generate() {
     -*)            die 22 "Invalid option ${1@Q}" ;;
     *)             die 2 "Unexpected argument ${1@Q}" ;;
   esac; shift; done
+  readonly VERBOSE
 
   local -- data_dir
   data_dir=$(_find_data_dir) || die 3 'Data directory not found'
@@ -2292,6 +2333,7 @@ cmd_generate() {
 # Subcommand: help
 
 cmd_help() {
+  readonly VERBOSE
   (($#)) || { show_main_help; return 0; }
 
   case $1 in
@@ -2335,6 +2377,8 @@ main() {
     esac
     shift
   done
+  # VERBOSE is not frozen here: four subcommands parse -v/-q again. Each
+  # subcommand freezes it once its own parsing is done.
 
   # Dispatch to subcommand
   case $subcmd in

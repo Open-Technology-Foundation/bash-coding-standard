@@ -9,6 +9,9 @@
 # keys below are dummies.
 set -euo pipefail
 shopt -s inherit_errexit
+# bcs is sourced below and leaves PATH to its caller (BCS1002), so the suite
+# sets the value an executed bcs would.
+declare -rx PATH=~/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 #shellcheck source-path=SCRIPTDIR source=test-helpers.sh
 source "$(dirname "$0")"/test-helpers.sh
@@ -109,6 +112,15 @@ reset_cache
 run_check "$OLLAMA_EMPTY" -m qwen3.5:9b
 assert_equal 5 "$RC" 'ollama empty -> exit 5' ||:
 assert_equal 0 "$(cache_count)" 'ollama empty -> nothing cached' ||:
+
+# 8. A body that is not JSON (a proxy's error page served with HTTP 200) is a
+#    parse failure with a message, on Ollama as on the other three backends.
+begin_test 'ollama unparseable body'
+reset_cache
+run_check '<html>502 Bad Gateway</html>' -m qwen3.5:9b
+assert_equal 5 "$RC" 'ollama non-JSON body -> exit 5' ||:
+assert_contains "$ERR" 'Failed to parse Ollama response' 'the parse failure is named' ||:
+assert_equal 0 "$(cache_count)" 'ollama non-JSON body -> nothing cached' ||:
 
 print_summary 'check-empty-content'
 #fin
