@@ -74,6 +74,13 @@ help_output=$("$BCS_CMD" codes -h 2>/dev/null)
 assert_contains "$help_output" 'bcs codes' 'help has command name' || true
 
 # Test: codes rejects invalid options
+# A tier filter must name exactly one tier. 'core recommended' is a run of two
+# adjacent valid names; it used to pass validation and then match nothing.
+begin_test 'codes -T rejects a value that is not one tier'
+assert_fails "rejects -T 'core recommended'" "$BCS_CMD" codes -T 'core recommended' || true
+assert_fails 'rejects -T bogus' "$BCS_CMD" codes -T bogus || true
+assert_success 'accepts -T disabled' "$BCS_CMD" codes -T disabled || true
+
 begin_test 'codes rejects invalid options'
 assert_fails 'rejects --bogus' "$BCS_CMD" codes --bogus || true
 

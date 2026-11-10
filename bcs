@@ -695,6 +695,17 @@ _checker_standard() {
   ' "$1"
 }
 
+# True when $1 is exactly one of the remaining arguments. A padded match
+# ([[ " ${list[*]} " == *" $v "* ]]) is not a membership test: it also accepts
+# any run of adjacent elements, such as 'core recommended'.
+_in_list() {
+  local -- item
+  for item in "${@:2}"; do
+    [[ $item != "$1" ]] || return 0
+  done
+  return 1
+}
+
 # Numeric rank of a tier, for `-M` (at-or-above) comparisons. 0 for anything
 # unrecognised, which never satisfies a minimum.
 _tier_rank() {
@@ -1644,14 +1655,8 @@ cmd_check() {
     --no-shellcheck) shellcheck_ctx=0 ;;
     --cache)         use_cache=1 ;;
     --no-cache)      use_cache=0 ;;
-    -T|--tier)      noarg "$@"; shift; tier_filter=$1
-                    [[ " ${VALID_TIER_FILTERS[*]} " == *" $tier_filter "* ]] \
-                      || die 22 "Invalid tier ${tier_filter@Q} (valid: ${VALID_TIER_FILTERS[*]})"
-                    ;;
-    -M|--min-tier)  noarg "$@"; shift; min_tier_filter=$1
-                    [[ " ${VALID_TIER_FILTERS[*]} " == *" $min_tier_filter "* ]] \
-                      || die 22 "Invalid tier ${min_tier_filter@Q} (valid: ${VALID_TIER_FILTERS[*]})"
-                    ;;
+    -T|--tier)      noarg "$@"; shift; tier_filter=$1 ;;
+    -M|--min-tier)  noarg "$@"; shift; min_tier_filter=$1 ;;
     -j|--json)      json_output=1 ;;
     -D|--debug)     debug=1 ;;
     -v|--verbose)   VERBOSE=1 ;;
@@ -1673,6 +1678,15 @@ cmd_check() {
                     script_file=$1
                     ;;
   esac; shift; done
+  # A tier filter may come from -T/-M, the environment or bcs.conf, so the
+  # final values are validated here, once. A value that names no tier equals
+  # no finding's tier: as a filter it would remove every finding, and a script
+  # with core violations would be reported clean.
+  local -- tier_opt
+  for tier_opt in "$tier_filter" "$min_tier_filter"; do
+    [[ -z $tier_opt ]] || _in_list "$tier_opt" "${VALID_TIER_FILTERS[@]}" \
+      || die 22 "Invalid tier ${tier_opt@Q} (valid: ${VALID_TIER_FILTERS[*]})"
+  done
   readonly VERBOSE strict debug json_output shellcheck_ctx use_cache tier_filter min_tier_filter
 
   # Recursion guard: _llm_claude_cli exports BCS_CHECK_ACTIVE to its child
@@ -1810,7 +1824,7 @@ cmd_check() {
       recommended) filter_instr="FILTER: Only report findings for rules at tier 'core' or"
                    filter_instr+=" 'recommended'. Omit 'style'." ;;
       style)       : ;;  # report all
-      *)           : ;;  # unreachable: validated at -M parse time
+      *)           : ;;  # unreachable: validated after the parse loop
     esac
   fi
 
@@ -2112,7 +2126,7 @@ cmd_codes() {
 
   while (($#)); do case $1 in
     -T|--tier)     noarg "$@"; shift; tier_filter=$1
-                   [[ " ${VALID_TIERS[*]} " == *" $tier_filter "* ]] \
+                   _in_list "$tier_filter" "${VALID_TIERS[@]}" \
                      || die 22 "Invalid tier ${tier_filter@Q} (valid: ${VALID_TIERS[*]})"
                    ;;
     -E|--explain)  noarg "$@"; shift; explain_code=${1^^}

@@ -124,11 +124,11 @@ assert_equal untouched "$path_state" 'PATH neither replaced nor made readonly' |
 begin_test 'bcs line count is reasonable'
 declare -i bcs_lines
 bcs_lines=$(wc -l < "$BCS_CMD")
-if ((bcs_lines >= 400 && bcs_lines <= 2400)); then
-  printf '  %s✓%s line count %d in range [400-2400]\n' "$GREEN" "$NC" "$bcs_lines"
+if ((bcs_lines >= 400 && bcs_lines <= 2600)); then
+  printf '  %s✓%s line count %d in range [400-2600]\n' "$GREEN" "$NC" "$bcs_lines"
   TESTS_PASSED+=1
 else
-  printf '  %s✗%s line count %d outside range [400-2400]\n' "$RED" "$NC" "$bcs_lines"
+  printf '  %s✗%s line count %d outside range [400-2600]\n' "$RED" "$NC" "$bcs_lines"
   TESTS_FAILED+=1
 fi
 

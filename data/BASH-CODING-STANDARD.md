@@ -3619,7 +3619,7 @@ When `1`, `shellcheck --format=json -x` runs over the target script and the JSON
 - **Override flag:** `-T`, `--tier`
 - **Consumed:** `cmd_check()` initialiser
 
-Restricts findings to a single tier. Useful in CI: `BCS_TIER=core` reports only correctness/safety bugs.
+Restricts findings to a single tier. Useful in CI: `BCS_TIER=core` reports only correctness/safety bugs. Any other value is refused with exit 22, whether it comes from this variable, `bcs.conf` or `-T`: a filter that names no tier would match no finding.
 
 ### `BCS_MIN_TIER`
 
@@ -3628,7 +3628,7 @@ Restricts findings to a single tier. Useful in CI: `BCS_TIER=core` reports only 
 - **Override flag:** `-M`, `--min-tier`
 - **Consumed:** `cmd_check()` initialiser
 
-Reports findings at the named tier or higher severity. `BCS_MIN_TIER=recommended` skips style findings during development.
+Reports findings at the named tier or higher severity. `BCS_MIN_TIER=recommended` skips style findings during development. Any other value is refused with exit 22.
 
 ### `BCS_RESPONSE_DUMP`
 
