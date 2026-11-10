@@ -23,7 +23,7 @@ shopt -s inherit_errexit extglob nullglob
 
 # Script metadata
 ### VERSION managed by version
-declare -r VERSION=2.0.8
+declare -r VERSION=2.0.9
 ###
 #shellcheck disable=SC2155  # accepted: declare masks realpath's exit status (BCS0103)
 declare -r SCRIPT_PATH=$(realpath -- "$0")
