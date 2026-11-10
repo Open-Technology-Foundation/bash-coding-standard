@@ -210,5 +210,129 @@ for ttype in minimal basic complete library; do
     || assert_gt "$ro_ln" "$last_assign_ln" "$ttype freezes them after the parse loop"
 done
 
+# tpl_rc ARGS... -> exit status of `bcs template ARGS...`
+tpl_rc() {
+  local -i rc=0
+  "$BCS_CMD" template "$@" &>/dev/null || rc=$?
+  echo "$rc"
+}
+
+begin_test 'rejects a template type that is not one type'
+assert_equal 22 "$(tpl_rc -t 'minimal basic')" "-t 'minimal basic' -> invalid argument (22)" || true
+
+# The three values are written into shell source: -n and -V inside single
+# quotes, -d into a comment line and into the help heredoc, which is unquoted.
+# A value that would end the context it lands in used to inject code into the
+# generated script, or make its --help die. It is refused instead.
+begin_test 'refuses values that would break the generated source'
+assert_equal 22 "$(tpl_rc -t basic -V "1.0'; id; echo '")" 'single quote in -V -> exit 22' || true
+assert_equal 22 "$(tpl_rc -t minimal -n "x'; id; echo '")" 'single quote in -n -> exit 22' || true
+assert_equal 22 "$(tpl_rc -t minimal -d $'one\ntwo')" 'newline in -d -> exit 22' || true
+#shellcheck disable=SC2016  # the dollar sign is the literal value under test
+assert_equal 22 "$(tpl_rc -t complete -d 'Costs $5')" 'dollar in -d -> exit 22' || true
+#shellcheck disable=SC2016  # the backquotes are the literal value under test
+assert_equal 22 "$(tpl_rc -t complete -d 'run `id`')" 'backquote in -d -> exit 22' || true
+assert_equal 22 "$(tpl_rc -t complete -d 'a\\b')" 'doubled backslash in -d -> exit 22' || true
+#shellcheck disable=SC1003  # the value under test really does end in a backslash
+assert_equal 22 "$(tpl_rc -t complete -d 'ends with \')" 'trailing backslash in -d -> exit 22' || true
+
+# The values are substituted one after another, so a placeholder carried
+# inside one value would be replaced by the next and land in the wrong context.
+begin_test 'refuses a value that carries a placeholder'
+assert_equal 22 "$(tpl_rc -t basic -n '{{DESCRIPTION}}' -d "x'; id; echo '")" \
+  'description smuggled into the name -> exit 22' || true
+#shellcheck disable=SC2016  # the command substitution is the literal value under test
+assert_equal 22 "$(tpl_rc -t complete -d '{{VERSION}}' -V '$(id)')" \
+  'version smuggled into the description -> exit 22' || true
+
+# Only `complete` writes the description into text the shell expands. In the
+# other templates it is a comment, where a dollar sign is inert and always worked.
+begin_test 'a dollar sign in a comment-only description is accepted'
+for ttype in minimal basic library; do
+  #shellcheck disable=SC2016  # the dollar sign is the literal value under test
+  out=$("$BCS_CMD" template -t "$ttype" -n demo -d 'Back up $HOME nightly' 2>/dev/null) || out=''
+  #shellcheck disable=SC2016  # as above
+  assert_contains "$out" '# Back up $HOME nightly' "$ttype keeps the description verbatim" || true
+done
+
+begin_test 'the refusal names the value at fault'
+out=$("$BCS_CMD" template -t basic -o "$temp_file.it's.sh" 2>&1) || true
+assert_contains "$out" 'Script name' 'a name taken from -o is called the script name' || true
+assert_not_contains "$out" 'ersion' 'the version is not blamed' || true
+
+# An empty name is an empty identifier prefix in the library template, whose
+# functions would then be called _msg, _error ... in the shell that sources it.
+# The directory below does not exist, so nothing is written either way.
+begin_test 'refuses an empty or reserved name'
+assert_equal 22 "$(tpl_rc -t library -o "$temp_file".d/.sh)" 'a name derived as empty -> exit 22' || true
+assert_equal 22 "$(tpl_rc -t library -n BASH)" 'library name BASH (BASH_VERSION is taken) -> exit 22' || true
+
+# Only what would break the generated source is refused.
+begin_test 'harmless values are accepted'
+out=$("$BCS_CMD" template -t basic -n demo -d 'Expand {{VAR}} tokens in config files' 2>/dev/null) || out=''
+assert_contains "$out" '# Expand {{VAR}} tokens in config files' 'braces that are no placeholder' || true
+assert_equal 0 "$(tpl_rc -t minimal -V "1.0'rc")" 'a quote in -V where the template has no version' || true
+
+# In the help heredoc of `complete` a backslash is live only before $, a
+# backquote or another backslash, and a $ only when something follows it that
+# could start an expansion. Descriptions like these always worked and must.
+begin_test 'complete accepts what is inert in its help text'
+for desc in 'Convert \r\n line endings to \n' 'Join C:\tmp files' 'Price list in US$ (monthly)' 'Totals in US$'; do
+  if [[ $(tpl_rc -t complete -n demo -d "$desc" -o "$temp_file" -f) == 0 ]]; then
+    out=$(bash -- "$temp_file" --help 2>&1) || out="--help failed: $out"
+    assert_contains "$out" "-- $desc" "help shows ${desc@Q} verbatim" || true
+  else
+    assert_equal 0 22 "${desc@Q} is accepted" || true
+  fi
+done
+
+# A range such as A-Z takes in accented letters where the locale collates, so
+# the library-name sanitiser must work on bytes too. Needs a UTF-8 locale other
+# than C.UTF-8; skipped without one.
+begin_test 'library name is reduced to ASCII in a collating locale'
+utf8_locale=$(locale -a 2>/dev/null | grep -i -E '^[a-z]{2}_[A-Z]{2}\.utf-?8$' | head -n 1) || utf8_locale=''
+if [[ -n $utf8_locale ]]; then
+  out=$(LC_ALL=$utf8_locale "$BCS_CMD" template -t library -n 'żółw' 2>/dev/null) || out=''
+  assert_equal 1 "$(LC_ALL=C grep -c -- '^\[\[ ! -v [A-Za-z0-9_]*_VERSION \]\]' <<< "$out" || true)" \
+    "fence variable is an ASCII identifier under $utf8_locale" || true
+  # a C1 control character is one character there, and no byte of it is a C0 control
+  assert_equal 22 "$(LC_ALL=$utf8_locale tpl_rc -t basic -d $'clear\xc2\x9b2J')" \
+    'a C1 control character -> exit 22' || true
+else
+  printf '  %s◉%s no collating UTF-8 locale installed -- skipping\n' "$CYAN" "$NC"
+fi
+
+# The checks must see bytes, as the shell that later reads the file does. In a
+# double-byte locale a lead byte would otherwise hide the brace or the quote
+# that follows it. Needs localedef and the GBK charmap; skipped without them.
+begin_test 'validation is byte-wise, whatever the locale'
+locale_dir=$temp_file.loc
+if command -v localedef >/dev/null && mkdir -- "$locale_dir" \
+    && localedef -f GBK -i zh_CN "$locale_dir"/zh_CN.GBK &>/dev/null; then
+  gbk_rc() {
+    local -i rc=0
+    LOCPATH=$locale_dir LC_ALL=zh_CN.GBK "$BCS_CMD" template "$@" &>/dev/null || rc=$?
+    echo "$rc"
+  }
+  assert_equal 22 "$(gbk_rc -t basic -n $'\x81{{DESCRIPTION}}' -d "x'; id; echo '")" \
+    'a lead byte does not hide a placeholder' || true
+  #shellcheck disable=SC2016  # the backquotes are the literal value under test
+  assert_equal 22 "$(gbk_rc -t complete -n demo -d $'\x81`id;\x81`')" \
+    'lead bytes do not hide a pair of backquotes' || true
+else
+  printf '  %s◉%s localedef or the GBK charmap not available -- skipping\n' "$CYAN" "$NC"
+fi
+rm -rf -- "$locale_dir"
+
+# Reuses $temp_file, which the EXIT trap above already removes.
+begin_test 'ordinary punctuation still generates a working script'
+assert_equal 0 "$(tpl_rc -t complete -n demo -d "Deploy the app's config & more (v2)" \
+  -V 1.2.3-rc1 -o "$temp_file" -f)" 'the script is generated' || true
+declare -i help_rc=0
+out=$(bash -- "$temp_file" --help 2>&1) || help_rc=$?
+assert_equal 0 "$help_rc" 'its --help exits 0' || true
+assert_contains "$out" "Deploy the app's config & more (v2)" 'description shown by --help' || true
+assert_contains "$out" 1.2.3-rc1 'version shown by --help' || true
+
 print_summary 'template'
 #fin

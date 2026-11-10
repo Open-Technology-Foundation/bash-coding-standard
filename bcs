@@ -176,10 +176,10 @@ read_conf() {
       ?([0-7])[0-7][0145][0145])
         : ;; # safe perms
       ?([0-7])[0-7][0-7][2367])
-        die 13 "$conf_file: world-writable (mode $mode) -- refusing to source as" \
+        die 13 "${conf_file@Q}: world-writable (mode $mode) -- refusing to source as" \
                 "shell; run: chmod o-w ${conf_file@Q}" ;;
       *)
-        warn "$conf_file: group-writable mode $mode -- file is sourced as shell; chmod g-w recommended" ;;
+        warn "${conf_file@Q}: group-writable mode $mode -- file is sourced as shell; chmod g-w recommended" ;;
     esac
     #shellcheck source=/dev/null
     source -- "$conf_file"
@@ -254,9 +254,9 @@ ${BOLD}Usage:$NC $SCRIPT_NAME template [OPTIONS]
 ${BOLD}Options:$NC
   -t, --type TYPE       Template type (minimal, ${BOLD}basic$NC, complete, library)
                         (default: basic)
-  -n, --name NAME       Script name for placeholders
-  -d, --desc TEXT       Script description
-  -V, --version VER     Version string (default: ${BOLD}1.0.0$NC)
+  -n, --name NAME       Script name for placeholders (no single quote)
+  -d, --desc TEXT       Script description (complete: nothing the shell expands)
+  -V, --version VER     Version string (default: ${BOLD}1.0.0$NC; no single quote)
   -o, --output FILE     Output file (default: ${BOLD}stdout$NC)
   -x, --executable      Make output file executable
   -f, --force           Overwrite existing files
@@ -627,10 +627,10 @@ _load_policy() {
         if [[ " ${VALID_TIERS[*]} " == *" $tier "* ]]; then
           BCS_POLICY[$code]=$tier
         else
-          warn "$path:$lineno: invalid tier ${tier@Q} (valid: ${VALID_TIERS[*]})"
+          warn "${path@Q}:$lineno: invalid tier ${tier@Q} (valid: ${VALID_TIERS[*]})"
         fi
       else
-        warn "$path:$lineno: malformed policy line ${line@Q}"
+        warn "${path@Q}:$lineno: malformed policy line ${line@Q}"
       fi
     done < "$path"
   done
@@ -706,6 +706,16 @@ _in_list() {
   return 1
 }
 
+# True when $1, read byte by byte, matches the glob $2. In a double-byte locale
+# a lead byte hides the byte that follows it from a pattern, and in a collating
+# one a range such as A-Z takes in accented letters. The body is a subshell, so
+# the C locale ends with it and messages keep the caller's.
+_bytes_match() (
+  LC_ALL=C
+  #shellcheck disable=SC2053  # $2 is a glob, by design
+  [[ $1 == $2 ]]
+)
+
 # Numeric rank of a tier, for `-M` (at-or-above) comparisons. 0 for anything
 # unrecognised, which never satisfies a minimum.
 _tier_rank() {
@@ -743,7 +753,7 @@ _filter_by_tier() {
     code=''
     [[ $line =~ BCS[0-9]{4} ]] && code=${BASH_REMATCH[0]} ||:
     if [[ -n $code ]]; then
-      tier=$(_effective_tier "$code")
+      tier=$(_effective_tier "$code") || tier=''   # no tier data: keep the line
       if [[ -n $tier ]]; then
         [[ $tier != disabled ]] || continue
         if [[ -n $want ]]; then
@@ -1081,7 +1091,10 @@ _llm_anthropic() {
 # LLM backend: Ollama chat API
 _llm_ollama() {
   local -- model=$1 effort=$2 sys=$3 usr=$4
-  local -- ollama_host=${OLLAMA_HOST:-localhost:11434}
+  # OLLAMA_HOST is host:port, or a base URL that carries its own scheme.
+  local -- ollama_url=${OLLAMA_HOST:-localhost:11434}
+  [[ $ollama_url == *://* ]] || ollama_url=http://$ollama_url
+  ollama_url=${ollama_url%/}
   local -i num_predict=${EFFORT_TOKENS[$effort]}
 
   # Ollama truncates the prompt to the server default (4096 tokens) unless
@@ -1132,7 +1145,7 @@ _llm_ollama() {
   raw=$(curl -s --max-time 600 -w $'\n%{http_code}' \
     -H 'Content-Type: application/json' \
     -d @- \
-    "http://$ollama_host/api/chat" <<< "$payload") || die 5 'Ollama API connection failed'
+    "$ollama_url"/api/chat <<< "$payload") || die 5 'Ollama API connection failed'
   http_code=${raw##*$'\n'}
   body=${raw%$'\n'"$http_code"}
   _dump_response "$body"
@@ -1523,11 +1536,12 @@ cmd_display() {
     return 0
   fi
 
-  # Try md2ansi for formatted output if terminal
+  # On a terminal, format with md2ansi and page through less. Without either
+  # tool the plain text below is the answer.
   if [[ -t 1 ]]; then
     local -- md2ansi_cmd
     md2ansi_cmd=$(_find_md2ansi) || md2ansi_cmd=''
-    if [[ -n $md2ansi_cmd ]]; then
+    if [[ -n $md2ansi_cmd ]] && command -v less >/dev/null; then
       # Tolerate early pager quit (SIGPIPE on md2ansi) -- display still succeeded.
       "$md2ansi_cmd" -- "$bcs_file" | less -FXRS ||:
       return 0
@@ -1551,7 +1565,7 @@ cmd_template() {
 
   while (($#)); do case $1 in
     -t|--type)       noarg "$@"; shift; template_type=$1
-                     [[ " ${VALID_TEMPLATES[*]} " == *" $template_type "* ]] || \
+                     _in_list "$template_type" "${VALID_TEMPLATES[@]}" || \
                        die 22 "Invalid template type ${template_type@Q} (valid: minimal, basic, complete, library)"
                      ;;
     #bcscheck disable=BCS0806  # -n names the generated script here; established CLI
@@ -1592,27 +1606,70 @@ cmd_template() {
     die 22 "Output file already exists ${output_file@Q} (use -f to overwrite)"
   fi
 
-  # The library template uses {{NAME}} as a shell identifier prefix, so a name
-  # like 'my.tool' or 'my-tool' would yield invalid function/variable names.
-  # Sanitize to a valid identifier for that type only (other types use {{NAME}}
-  # only in comments/strings, where punctuation is harmless).
+  # An empty name (-o .sh) would be an empty identifier prefix in the library
+  # template: its functions would be _msg, _error ... in the sourcing shell.
+  [[ -n $script_name ]] || die 22 'Script name must not be empty'
+
+  # The library template uses {{NAME}} as a shell identifier prefix, in printf
+  # formats and inside double quotes, so there the name is reduced to a valid
+  # identifier. The reduction works on bytes (LC_ALL=C in the substitution's
+  # subshell): where the locale collates, A-Z also takes in accented letters.
+  # BASH is refused: BASH_VERSION always exists, so that library's
+  # already-sourced fence would be shut from the start.
   if [[ $template_type == library ]]; then
-    script_name=${script_name//[^A-Za-z0-9_]/_}
+    script_name=$(LC_ALL=C; printf '%s' "${script_name//[^A-Za-z0-9_]/_}")
     [[ $script_name == [0-9]* ]] && script_name=_$script_name ||:
+    [[ $script_name != BASH ]] \
+      || die 22 'Library name BASH is taken: Bash sets BASH_VERSION itself'
   fi
 
-  # Read and substitute placeholders. Disable patsub_replacement so a literal
-  # '&' or backslash in a value is inserted verbatim rather than treated as the
-  # matched text (bash 5.2 enables patsub_replacement by default).
   local -- content
   content=$(< "$template_file")
+
+  # The values are written into shell source, so one that would end the
+  # context it lands in is refused, by name. The tests read bytes
+  # (_bytes_match): the generated script may be run under any locale, and
+  # bytes are the strictest reading of it.
+  # No value may hold a control character (a newline ends a comment line; the
+  # caller's locale is asked as well, for the ones that are a single character
+  # only there) or a placeholder: the three are substituted in sequence, so a
+  # placeholder inside one value would be replaced by a later one, in the
+  # wrong context.
+  local -- value line
+  for value in "$script_name" "$description" "$version"; do
+    [[ $value != *[[:cntrl:]]* ]] && ! _bytes_match "$value" '*[[:cntrl:]]*' \
+      && ! _bytes_match "$value" '*{{@(NAME|DESCRIPTION|VERSION)}}*' \
+      || die 22 "Template value ${value@Q} must not contain a control character or a placeholder"
+  done
+  # Outside the library template NAME sits inside single quotes, and so does
+  # VERSION wherever a template uses it.
+  ! _bytes_match "$script_name" "*'*" \
+    || die 22 "Script name ${script_name@Q} must not contain a single quote"
+  [[ $content != *'{{VERSION}}'* ]] || ! _bytes_match "$version" "*'*" \
+    || die 22 "Version ${version@Q} must not contain a single quote"
+  # DESCRIPTION is inert in a comment line. Where a template also writes it
+  # into text the shell expands (the unquoted help heredoc of `complete`), it
+  # may hold nothing that is live there: no backquote; no $ unless a space or
+  # the end follows; no backslash before $, a backquote or another backslash,
+  # and none at the end, where it would join the next line.
+  while IFS= read -r line; do
+    [[ $line == *'{{DESCRIPTION}}'* && ! $line =~ ^[[:space:]]*# ]] || continue
+    ! _bytes_match "$description" '*`*' && ! _bytes_match "$description" '*$[! ]*' \
+      && ! _bytes_match "$description" '*\\[$`\\]*' && ! _bytes_match "$description" '*[\\]' \
+      || die 22 "Description ${description@Q} holds a backquote, a \$ or a backslash that the" \
+                "shell would expand in the help text of the $template_type template"
+  done <<< "$content"
+
+  # Substitute placeholders. Disable patsub_replacement so a literal '&' or
+  # backslash in a value is inserted verbatim rather than treated as the
+  # matched text (bash 5.2 enables patsub_replacement by default).
   local -i _had_patsub=0
-  shopt -q patsub_replacement 2>/dev/null && _had_patsub=1 ||:
-  shopt -u patsub_replacement 2>/dev/null ||:
+  shopt -q patsub_replacement && _had_patsub=1 ||:
+  shopt -u patsub_replacement
   content=${content//\{\{NAME\}\}/$script_name}
   content=${content//\{\{DESCRIPTION\}\}/$description}
   content=${content//\{\{VERSION\}\}/$version}
-  ((_had_patsub)) && shopt -s patsub_replacement 2>/dev/null ||:
+  ((_had_patsub)) && shopt -s patsub_replacement ||:
 
   # Write output
   if [[ -n $output_file ]]; then
@@ -1679,9 +1736,10 @@ cmd_check() {
                     ;;
   esac; shift; done
   # A tier filter may come from -T/-M, the environment or bcs.conf, so the
-  # final values are validated here, once. A value that names no tier equals
-  # no finding's tier: as a filter it would remove every finding, and a script
-  # with core violations would be reported clean.
+  # final values are validated here, once. A -T value that names no tier
+  # equals no finding's tier: as a filter it would remove every finding, and a
+  # script with core violations would be reported clean. An unknown -M value
+  # ranks zero and would be silently ignored.
   local -- tier_opt
   for tier_opt in "$tier_filter" "$min_tier_filter"; do
     [[ -z $tier_opt ]] || _in_list "$tier_opt" "${VALID_TIER_FILTERS[@]}" \
@@ -1699,7 +1757,9 @@ cmd_check() {
   # at parse time, so normalize the 'min' alias and validate the final value
   # once here.
   [[ $effort == min ]] && effort=low
-  [[ " ${VALID_EFFORTS[*]} " == *" $effort "* ]] || die 22 "Invalid effort ${effort@Q}"
+  _in_list "$effort" "${VALID_EFFORTS[@]}" || die 22 "Invalid effort ${effort@Q}"
+  # An empty -m would reach the alias map as an empty array subscript.
+  [[ -n $model ]] || die 22 'Model name must not be empty'
 
   [[ -n $script_file ]] || die 2 'No script file specified'
   [[ -f $script_file ]] || die 3 "Script not found ${script_file@Q}"
@@ -1728,7 +1788,7 @@ cmd_check() {
       die 22 "Tier keyword ${model@Q} no longer supported; use a model name or" \
              "alias (e.g. -m sonnet, -m opus, -m gpt5). See $SCRIPT_NAME.conf.sample" \
              "for the alias map, or run $SCRIPT_NAME help check. After updating," \
-             "reload your shell to refresh tab-completion."
+             'reload your shell to refresh tab-completion.'
       ;;
     *) : ;;
   esac
@@ -1835,7 +1895,7 @@ cmd_check() {
   # assembled prompt -- the claude-cli backend assembles its own) plus VERSION
   # so prompt-template changes in new releases invalidate stale entries.
   # Disabled with --no-cache or BCS_CACHE=0 (no read, no write).
-  local -- cache_file=''
+  local -- cache_file='' cached=''
   local -i cache_hit=0
   if ((use_cache)); then
     local -- cache_dir=${XDG_CACHE_HOME:-$HOME/.cache}/bcs cache_key=''
@@ -1847,7 +1907,11 @@ cmd_check() {
     cache_key=${cache_key%% *}
     if [[ -n $cache_key ]]; then
       cache_file=$cache_dir/$cache_key
-      if [[ -s $cache_file ]]; then
+      # A hit is an entry that was actually read here. A directory, a file
+      # that cannot be read (left by another user), an empty one, or one
+      # removed in the meantime is a miss, and the check runs afresh.
+      if [[ -f $cache_file && -r $cache_file ]] && cached=$(< "$cache_file") \
+          && [[ -n $cached ]]; then
         cache_hit=1
         info 'Result cache hit (use --no-cache to force a fresh check)'
       fi
@@ -1864,7 +1928,7 @@ cmd_check() {
   if ((cache_hit)); then
     # Cached result already validated on the run that stored it; the
     # severity-based exit code is recomputed from content below as usual.
-    result=$(< "$cache_file")
+    result=$cached
   elif [[ $backend == claude ]]; then
     # Made and registered here, in the shell that owns the EXIT net: Ctrl-C
     # during a CLI run used to leave the directory, and the script copy in it.
@@ -2086,13 +2150,15 @@ $numbered_script"
   # stored (severity-promoted exit 1 is a valid, cacheable outcome -- the
   # promotion is recomputed from content on every hit). Temp + mv keeps
   # concurrent checks from reading a partial write. Failures are non-fatal:
-  # a missing entry just means the next run pays full price.
+  # a missing entry just means the next run pays full price. mv -T: should a
+  # directory sit where the entry belongs, fail rather than move into it.
   if ((use_cache && !cache_hit && cacheable)) && [[ -n $cache_file ]]; then
     local -- cache_tmp=''
     mkdir -p -- "${cache_file%/*}" 2>/dev/null ||:
     if cache_tmp=$(mktemp -- "${cache_file%/*}"/.tmp.XXXXXX 2>/dev/null); then
+      _register_tmp "$cache_tmp"   # a signal before the mv must not strand it
       printf '%s\n' "$result" > "$cache_tmp" 2>/dev/null \
-        && mv -f -- "$cache_tmp" "$cache_file" 2>/dev/null \
+        && mv -fT -- "$cache_tmp" "$cache_file" 2>/dev/null \
         || rm -f -- "$cache_tmp" 2>/dev/null ||:
     fi
   fi
@@ -2103,7 +2169,7 @@ $numbered_script"
   # re-running. For the claude-code CLI backend the dump holds the CLI's
   # stderr (it returns text directly, not a JSON body).
   local -i dump_show=0
-  if ((debug)) || ((exit_code != 0)); then
+  if ((debug)) || ((exit_code)); then
     dump_show=1
   fi
   if ((dump_show)); then
@@ -2305,10 +2371,12 @@ cmd_generate() {
 
   # First section's SPDX marker is preserved as the canonical header;
   # strip the marker from every subsequent section to avoid 14 duplicates.
-  # BCS0110: clean up the temp on interrupt/abort before the atomic mv.
-  # ${tmp_out@Q} bakes a shell-quoted literal into the trap -- injection-safe (an
-  # -o path with quotes cannot break out) and refire-safe: a RETURN trap persists
-  # and fires again when main returns, where a late "$tmp_out" would be unbound.
+  # BCS0110: the trap goes in before mktemp, guarded on an empty name. It is
+  # single-quoted, so the path is expanded when the trap fires and is never
+  # parsed as code (an -o path with quotes cannot break out). ${tmp_out:-}
+  # matters on a refire: a RETURN trap persists and fires again when main
+  # returns, where tmp_out no longer exists. die and signals fire no RETURN
+  # trap; the _register_tmp below covers those.
   local -- out_dir=${output_file%/*} tmp_out=''
   [[ $out_dir != "$output_file" ]] || out_dir=.
   trap '[[ -z ${tmp_out:-} ]] || rm -f -- "$tmp_out"' RETURN
@@ -2385,7 +2453,7 @@ main() {
       -q|--quiet)    VERBOSE=0 ;;
       --)            shift; break ;;
       -[Vhvq]?*)     set -- "${1:0:2}" "-${1:2}" "${@:2}"; continue ;;
-       # Any other options means it's for subcmd 'display'
+      # Any other options means it's for subcmd 'display'
       -*)            break ;;
       *)             subcmd=${1,,}; shift; break ;;
     esac

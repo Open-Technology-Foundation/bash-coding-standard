@@ -11,6 +11,8 @@
 #   MOCK_BODY         HTTP 200 body the curl mock replays (set by run_check)
 #   MOCK_CLI_OUTPUT / MOCK_CLI_STDERR / MOCK_CLI_RC   what the claude mock does
 #   PAYLOAD_FILE      request body of the last curl call
+#   CURL_ARGV_FILE    argv of the last curl call, newline-separated; the -w
+#                     argument itself holds a newline, the URL is the last line
 #   CLI_ARGV_FILE     argv of the last claude call, one argument per line
 #   TIMEOUT_ARGV_FILE argv of the last timeout call, one argument per line
 #   CLI_STANDARD_FILE copy of the standard the last claude call was pointed at
@@ -42,6 +44,7 @@ declare -x XDG_CACHE_HOME="$SANDBOX"/cache XDG_STATE_HOME="$SANDBOX"/state \
            XDG_CONFIG_HOME="$SANDBOX"/config BCS_CONF_DIR="$SANDBOX"/conf
 mkdir -p "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_CONFIG_HOME" "$BCS_CONF_DIR"
 declare -rx PAYLOAD_FILE="$SANDBOX"/payload.json CLI_ARGV_FILE="$SANDBOX"/cli-argv.txt \
+            CURL_ARGV_FILE="$SANDBOX"/curl-argv.txt \
             TIMEOUT_ARGV_FILE="$SANDBOX"/timeout-argv.txt \
             CLI_STANDARD_FILE="$SANDBOX"/cli-standard.md \
             CLI_SCRIPT_FILE="$SANDBOX"/cli-script.sh
@@ -55,9 +58,10 @@ declare -x ANTHROPIC_API_KEY=test-anthropic OPENAI_API_KEY=test-openai \
 # shellcheck disable=SC2034
 VERBOSE=0
 
-# Mock curl: keep the request body (-d @-), replay $MOCK_BODY plus the HTTP
+# Mock curl: keep argv and the request body (-d @-), replay $MOCK_BODY plus the HTTP
 # code trailer that the backends split off.
 curl() {
+  printf '%s\n' "$@" > "$CURL_ARGV_FILE"
   cat > "$PAYLOAD_FILE" ||:
   printf '%s\n200\n' "$MOCK_BODY"
 }
@@ -100,6 +104,7 @@ run_check() {
   MOCK_BODY=$1; shift
   RC=0
   : > "$PAYLOAD_FILE"
+  : > "$CURL_ARGV_FILE"
   : > "$CLI_ARGV_FILE"
   : > "$TIMEOUT_ARGV_FILE"
   : > "$CLI_STANDARD_FILE"

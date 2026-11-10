@@ -73,13 +73,21 @@ Template type:
 .BR library " (~48 lines)."
 .TP
 .BR \-n ", " \-\-name " " \fINAME\fR
-Script name for placeholders.
+Script name for placeholders. An empty name, a single quote, a control
+character or a placeholder such as
+.B {{VERSION}}
+is refused: the name is written into the generated source.
 .TP
 .BR \-d ", " \-\-desc " " \fITEXT\fR
-Script description.
+Script description. A control character or a placeholder is refused. With the
+.B complete
+template, which writes the text into help that the shell expands, anything
+live there is refused too: a backquote, a dollar sign unless a space or the
+end follows it, and a backslash before a dollar sign, a backquote or another
+backslash, or at the end.
 .TP
 .BR \-V ", " \-\-version " " \fIVER\fR
-Version string (default: 1.0.0).
+Version string (default: 1.0.0). A single quote is refused.
 .TP
 .BR \-o ", " \-\-output " " \fIFILE\fR
 Output file (default: stdout).
@@ -471,7 +479,8 @@ The four legacy
 overrides are gone \(em set the alias instead.
 .TP
 .B OLLAMA_HOST
-Ollama server address (default: localhost:11434).
+Ollama server address, as host:port or as a base URL with its scheme
+(default: localhost:11434).
 .TP
 .B BCS_OLLAMA_NUM_CTX
 Ollama context window in tokens, sent as
