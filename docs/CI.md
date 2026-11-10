@@ -58,7 +58,7 @@ repos:
 
   # Slow, LLM-graded — runs only on push.
   - repo: https://github.com/Open-Technology-Foundation/bash-coding-standard
-    rev: v2.0.8   # pin a tag
+    rev: v2.0.9   # pin a tag
     hooks:
       - id: bcs-check        # bcs check --strict --tier core, per changed shell file
         # args: [--model, haiku]   # uncomment to pin a cheap model
