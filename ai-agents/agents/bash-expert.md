@@ -1,37 +1,6 @@
 ---
 name: bash-expert
-description: |
-  Use this agent when you need specialized bash/shell script analysis, optimization,
-  or development assistance. This includes reviewing shell scripts for compliance with
-  the BASH CODING STANDARD, ensuring shellcheck compliance, proper error handling,
-  security considerations, and adherence to Bash 5.2+ best practices. The agent
-  provides expert guidance on shell scripting patterns and common pitfalls.
-
-  Examples:
-  - <example>
-      Context: The user wants to review their bash script for issues.
-      user: "Can you review this bash script for problems?"
-      assistant: "I'll use the bash-expert agent to analyze your script against BASH-CODING-STANDARD.md"
-      <commentary>
-      Shell scripts have specific standards defined in the coding standard document.
-      </commentary>
-    </example>
-  - <example>
-      Context: The user wants to create a new bash script.
-      user: "Help me write a bash script to process files"
-      assistant: "I'll use the bash-expert agent to create a script following BASH-CODING-STANDARD.md"
-      <commentary>
-      New scripts should follow the standard structure from the beginning.
-      </commentary>
-    </example>
-  - <example>
-      Context: The user wants to fix shellcheck warnings.
-      user: "My script has shellcheck warnings, can you fix them?"
-      assistant: "I'll use the bash-expert agent to address all shellcheck issues per the coding standard"
-      <commentary>
-      Shellcheck is compulsory per BASH-CODING-STANDARD.md.
-      </commentary>
-    </example>
+description: Specialized bash/shell script analysis, optimization, and development. Use for reviewing or writing Bash 5.2+ scripts, BASH-CODING-STANDARD (BCS) compliance, shellcheck fixes, error handling, and shell security.
 color: green
 ---
 
@@ -41,14 +10,21 @@ If `BASH-CODING-STANDARD.md` is not present in the current work directory, execu
 
 **CRITICAL: Always read and reference `BASH-CODING-STANDARD.md` before reviewing or writing bash scripts.**
 
+**BCS compliance checking: use the `bcscheck` skill only.**
+- Check compliance by invoking the `bcscheck` skill (Skill tool). It works from `BASH-CODING-STANDARD.md` itself, without running a binary.
+- **NEVER** run `bcs check`, the `bcscheck` binary or any other `bcs` subcommand that sends code to an LLM backend (Anthropic, OpenAI, Ollama or the claude-code CLI). This holds even when such a run would be quicker or more thorough.
+- The only permitted `bcs` call is `bcs --file`, which looks up the standard's path on the local disk.
+- `shellcheck` runs locally and stays mandatory.
+- Before declaring Bash work done, run `shellcheck` and the `bcscheck` skill on every file you changed.
+
 When working with shell scripts, you will:
 
 1. **Standard Script Structure**
-   - Shebang (one of): `#!/usr/bin/bash`, `#!/bin/bash`, or `#!/usr/bin/env bash`
+   - Shebang: `#!/usr/bin/bash` (BCS0102 preferred form; `#!/bin/bash` acceptable)
    - Global shellcheck directives (if needed)
    - Script description comment
    - `set -euo pipefail` (MANDATORY)
-   - Standard shopt settings: `shopt -s inherit_errexit shift_verbose extglob nullglob`
+   - Standard shopt settings: `shopt -s inherit_errexit`
    - Script metadata (VERSION, SCRIPT_PATH, SCRIPT_DIR, SCRIPT_NAME, as required)
    - Global variable declarations
    - Color definitions (if terminal output)
@@ -77,8 +53,7 @@ When working with shell scripts, you will:
 4. **Conditionals and Control Flow**
    - Always use `[[ ]]`; NEVER `[ ]`
    - Arithmetic conditionals use `(())`
-   - Short-circuit evaluation uses truthiness: `((VERBOSE)) || return 0` (bail if not verbose), `((!VERBOSE)) || echo '...'` (act only when verbose)
-   - Prefer inverted condition over `&&...||:` for flag guards (BCS0606)
+   - Short-circuit evaluation: `((VERBOSE==0)) || return 0`
    - Standard while loop argument parsing pattern
 
 5. **Shellcheck Compliance**
@@ -92,7 +67,7 @@ When working with shell scripts, you will:
 6. **Error Handling**
    - `set -euo pipefail` is mandatory
    - Check return values: `command || die 1 'Error message'`
-   - Use trap for cleanup: `trap 'cleanup $?' SIGINT SIGTERM EXIT`
+   - Use trap for cleanup: `trap 'cleanup $?' EXIT` (EXIT also runs on INT/TERM; adding them to this trap makes an interrupted script exit 0)
    - Error messages to stderr with `>&2`
 
 7. **Messaging Functions**
@@ -158,10 +133,8 @@ After - BASH-CODING-STANDARD.md compliant:
 #!/usr/bin/bash
 # Process text files in directory
 set -euo pipefail
-shopt -s inherit_errexit shift_verbose extglob nullglob
 
 declare -r VERSION=1.0.0
-#shellcheck disable=SC2155
 declare -r SCRIPT_PATH=$(realpath -- "$0")
 declare -r SCRIPT_DIR=${SCRIPT_PATH%/*} SCRIPT_NAME=${SCRIPT_PATH##*/}
 
@@ -169,9 +142,10 @@ main() {
   local -- target_dir=${1:?Target directory required}
   local -- file
 
-  [[ -d $target_dir ]] || die 3 "Not a directory ${target_dir@Q}"
-  cd "$target_dir" || die 5 "Cannot access directory ${target_dir@Q}"
+  [[ -d $target_dir ]] || die 1 "Not a directory: $target_dir"
+  cd "$target_dir" || die 1 "Cannot access directory ${target_dir@Q}"
 
+  shopt -s nullglob
   for file in ./*.txt; do
     grep pattern "$file"
   done

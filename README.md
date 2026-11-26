@@ -336,11 +336,14 @@ One entry point per checking function — no overlap:
 | ShellCheck remediation | `/fix-shellcheck` | Fixes SC#### per BCS patterns (per-user, `ai-agents/`) |
 
 The `bcscheck` skill honours `#bcscheck disable=` directives and uses
-shellcheck JSON as static context; for policy.conf tiers, JSON output, or
-caching use the real `bcs check`. Sources live in `skills/*/SKILL.md` and
+shellcheck JSON as static context; by default it audits the core-tier rules
+only (`--full` adds the WARN tiers, `--since REF` re-audits a diff), and its
+helper `bcscheck-prep` caches each report. For policy.conf tiers or JSON output
+use the real `bcs check`. Sources live in `skills/bcscheck/` and
 `ai-agents/commands/`; install machine-wide with `sudo make install-claude`,
 remove with `sudo make uninstall-claude`. The install set is the `bcscheck`
-skill plus the `/audit-bash` command. Run `make check-claude` first: it diffs the
+skill with its helper plus the `/audit-bash` command. The machine-wide copy in
+`/etc/claude-code` is canonical: the repo takes its changes from there. Run `make check-claude` first: it diffs the
 repo against the deployed copies and exits non-zero when a deployed file was
 edited in place, because `install-claude` would silently revert that edit.
 

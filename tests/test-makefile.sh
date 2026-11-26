@@ -34,6 +34,7 @@ declare -a CLAUDE_DIRS=(SKILLDIR="$SKILLS" CMDDIR="$CMDS")
 begin_test 'install-claude install set'
 run_make -n install-claude "${CLAUDE_DIRS[@]}"
 assert_contains "$OUT" 'skills/bcscheck/SKILL.md' 'installs the bcscheck skill' ||:
+assert_contains "$OUT" 'skills/bcscheck/bcscheck-prep' 'installs the skill helper bcscheck-prep' ||:
 assert_contains "$OUT" 'commands/audit-bash.md' 'installs the audit-bash command' ||:
 assert_not_contains "$OUT" 'bcs-audit' 'installs no bcs-audit skill or command' ||:
 
@@ -45,6 +46,9 @@ assert_contains "$OUT" 'not installed' 'nothing installed -> says so' ||:
 begin_test 'check-claude: fresh install'
 run_make install-claude "${CLAUDE_DIRS[@]}"
 assert_equal 0 "$RC" 'staged install-claude succeeds' ||:
+# The skill runs bcscheck-prep directly; installed 644 it would not run.
+assert_equal 755 "$(stat -c %a -- "$SKILLS"/bcscheck/bcscheck-prep)" 'bcscheck-prep installed 755' ||:
+assert_equal 644 "$(stat -c %a -- "$SKILLS"/bcscheck/SKILL.md)" 'SKILL.md installed 644' ||:
 run_make check-claude "${CLAUDE_DIRS[@]}"
 assert_equal 0 "$RC" 'fresh install -> clean' ||:
 

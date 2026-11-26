@@ -40,7 +40,8 @@ jobs:
             tests/fixtures/probabilistic/*.sh \
             tests/fixtures/clean/*.sh \
             tests/accuracy/bcs-accuracy-score.sh \
-            tests/accuracy/bcs-check-accuracy.sh
+            tests/accuracy/bcs-check-accuracy.sh \
+            skills/bcscheck/bcscheck-prep
 
       - name: Self-compliance invariant
         run: ./tests/test-self-compliance.sh

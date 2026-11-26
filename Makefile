@@ -106,12 +106,16 @@ uninstall:
 # function). Single source of truth for install-claude/check-claude.
 CLAUDE_FILES = \
   skills/bcscheck/SKILL.md:$(SKILLDIR)/bcscheck/SKILL.md \
+  skills/bcscheck/bcscheck-prep:$(SKILLDIR)/bcscheck/bcscheck-prep \
   ai-agents/commands/audit-bash.md:$(CMDDIR)/audit-bash.md
 
+# A source that is executable in the repo (bcscheck-prep) installs 755; the
+# rest install 644.
 install-claude:
 	@for pair in $(CLAUDE_FILES); do \
 	  src=$(srcdir)$${pair%%:*}; dst=$(DESTDIR)$${pair#*:}; \
-	  install -d "$${dst%/*}" && install -m 644 "$$src" "$$dst" || exit 1; \
+	  mode=644; [ -x "$$src" ] && mode=755; \
+	  install -d "$${dst%/*}" && install -m "$$mode" "$$src" "$$dst" || exit 1; \
 	done
 	@echo 'Installed Claude skill (bcscheck) and command (audit-bash)'
 
