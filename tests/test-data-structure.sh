@@ -3,8 +3,11 @@
 # test-data-structure.sh - Validate data directory structure and BCS codes
 set -euo pipefail
 shopt -s inherit_errexit
+
+declare -rx PATH=~/.local/bin:/usr/local/bin:/usr/bin:/bin
+
 #shellcheck source-path=SCRIPTDIR source=test-helpers.sh
-source "$(dirname "$0")"/test-helpers.sh
+source -- "$(dirname -- "$0")"/test-helpers.sh
 
 echo 'Testing: data structure validation'
 
@@ -55,6 +58,7 @@ begin_test 'section files have proper headers'
 declare -i good_headers=0 expected_sections=0
 declare -- first_line line f
 for f in "$DATA_DIR"/[0-9]*.md; do
+  [[ -f $f ]] || continue
   [[ "${f##*/}" == BASH-CODING-STANDARD.md ]] && continue
   [[ "${f##*/}" == 00-* || "${f##*/}" == 99-* ]] && continue
   expected_sections+=1
@@ -79,13 +83,14 @@ begin_test 'every rule section has BCS codes'
 declare -i sections_with_codes=0 expected_code_sections=0
 declare -- section_num
 for f in "$DATA_DIR"/[0-9]*.md; do
+  [[ -f $f ]] || continue
   [[ "${f##*/}" == BASH-CODING-STANDARD.md ]] && continue
   [[ "${f##*/}" == 00-* || "${f##*/}" == 99-* ]] && continue
   section_num=${f##*/}
   section_num=${section_num:0:2}
   _is_no_code_section "$section_num" && continue
   expected_code_sections+=1
-  if grep -q '^## BCS[0-9]' "$f"; then
+  if grep -q -- '^## BCS[0-9]' "$f"; then
     sections_with_codes+=1
   else
     printf '    no BCS codes in %s\n' "${f##*/}"
@@ -101,13 +106,14 @@ while IFS= read -r line; do
     printf '    malformed code: %s\n' "$line"
     malformed+=1
   fi
-done < <(grep -h '^## BCS' "$DATA_DIR"/[0-9]*.md)
+done < <(grep -h -- '^## BCS' "$DATA_DIR"/[0-9]*.md)
 assert_equal 0 "$malformed" 'no malformed BCS codes' || true
 
 # Test: no duplicate BCS codes
 begin_test 'no duplicate BCS codes'
 declare -i duplicates
-duplicates=$(grep -h '^## BCS[0-9]' "$DATA_DIR"/[0-9]*.md | sort | uniq -d | wc -l)
+duplicates=$(grep -h -- '^## BCS[0-9]' "$DATA_DIR"/[0-9]*.md | sort | uniq -d | wc -l) \
+  || { printf '    cannot read the section files\n'; duplicates=-1; }
 assert_equal 0 "$duplicates" 'no duplicate BCS codes' || true
 
 # Test: BCS codes are sequential within sections
@@ -115,6 +121,7 @@ begin_test 'BCS codes follow section numbering'
 declare -i mismatched=0
 declare -- basename_f section_num code code_section line
 for f in "$DATA_DIR"/[0-9]*.md; do
+  [[ -f $f ]] || continue
   basename_f=${f##*/}
   [[ "$basename_f" == BASH-CODING-STANDARD.md ]] && continue
   [[ "$basename_f" == 00-* || "$basename_f" == 99-* ]] && continue
@@ -135,7 +142,8 @@ assert_equal 0 "$mismatched" 'all BCS codes match their section file' || true
 # Test: standard document line count is in range
 begin_test 'standard document line count in range'
 declare -i std_lines
-std_lines=$(wc -l < "$DATA_DIR"/BASH-CODING-STANDARD.md)
+std_lines=$(wc -l < "$DATA_DIR"/BASH-CODING-STANDARD.md) \
+  || { printf '    cannot read %s\n' "$DATA_DIR"/BASH-CODING-STANDARD.md; std_lines=0; }
 if ((std_lines >= 1500 && std_lines <= 4500)); then
   printf '  %s✓%s line count %d in range [1500-4500]\n' "$GREEN" "$NC" "$std_lines"
   TESTS_PASSED+=1
@@ -154,10 +162,12 @@ declare -a M_BAD=() M_LIST=()
 
 begin_test 'fixture manifest matches the files one-to-one'
 assert_file_exists "$MANIFEST" ||:
-ON_DISK=$(cd "$FIXTURES_DIR" && printf '%s\n' *.sh */*.sh | sort)
-LISTED=$(grep -v '^#' "$MANIFEST" | cut -f1 | sort)
+ON_DISK=$(cd -- "$FIXTURES_DIR" && printf '%s\n' ./*.sh ./*/*.sh | sed 's|^\./||' | sort) \
+  || ON_DISK='(cannot list the fixtures)'
+LISTED=$(grep -v -- '^#' "$MANIFEST" | cut -f1 | sort) \
+  || LISTED='(cannot read the manifest)'
 assert_equal "$ON_DISK" "$LISTED" 'every fixture listed once, every entry a file' ||:
-assert_equal '' "$(grep -v '^#' "$MANIFEST" | awk -F'\t' 'NF != 3' ||:)" \
+assert_equal '' "$(grep -v -- '^#' "$MANIFEST" | awk -F'\t' 'NF != 3' ||:)" \
   'every entry has three tab-separated fields' ||:
 
 begin_test 'fixture manifest codes'
@@ -184,7 +194,7 @@ done < "$MANIFEST"
 assert_equal '' "${M_BAD[*]}" 'clean entries empty, the rest name real rules' ||:
 
 begin_test 'no label inside a fixture'
-assert_equal '' "$(grep -l 'bcs-fixture-' "$FIXTURES_DIR"/*.sh "$FIXTURES_DIR"/*/*.sh ||:)" \
+assert_equal '' "$(grep -l -- 'bcs-fixture-' "$FIXTURES_DIR"/*.sh "$FIXTURES_DIR"/*/*.sh ||:)" \
   'no bcs-fixture- pragma survives in any fixture' ||:
 
 print_summary 'data-structure'
