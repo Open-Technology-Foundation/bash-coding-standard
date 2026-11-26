@@ -107,6 +107,10 @@ declare -r OUTPUT_CONTRACT="Output format (mandatory, machine-parsed):
 # the finding itself. Adjacent quoted fragments concatenate.
 declare -r ERROR_FINDING_RE='^[[:space:]]*([-*+>#]+[[:space:]]+|[0-9]+[.)][[:space:]]+)*[*_`]*'\
 '(\[ERROR\]|BCS[0-9]{4}[^[:alnum:]].{0,40}\[ERROR\])'
+# The same header layouts with either label: the lines _relabel_by_tier may
+# rewrite. A sentence that merely mentions a label is not one.
+declare -r FINDING_HEADER_RE='^[[:space:]]*([-*+>#]+[[:space:]]+|[0-9]+[.)][[:space:]]+)*[*_`]*'\
+'(\[(ERROR|WARN)\]|BCS[0-9]{4}[^[:alnum:]].{0,40}\[(ERROR|WARN)\])'
 
 # ---- Messaging System ----
 # vecho()/debug() (and DEBUG) belong to the BCS reference messaging suite and
@@ -774,6 +778,39 @@ _has_error_finding() {
     [[ ! $line =~ $ERROR_FINDING_RE ]] || return 0
   done <<< "$1"
   return 1
+}
+
+# Text-mode twin of the level derivation in _render_json_output: a finding's
+# severity comes from its rule's tier (after policy.conf), never from the
+# label the model printed. Trusting the label, a core finding printed [WARN]
+# exited 0 (BCS0406 on `which`, 2 runs in 5, 2026-11-26) and a style finding
+# printed [ERROR] would exit 1. Only a finding header is rewritten, and only
+# its first label. A code with no tier keeps the model's label and a rule that
+# policy.conf disables is dropped, both as in JSON mode; --strict makes every
+# tiered finding [ERROR].
+_relabel_by_tier() {
+  local -- text=$1 line label code tier want
+  local -i strict=$2
+  local -r label_re='\[(ERROR|WARN)\]'
+  # Prime the tier tables, as _filter_by_tier does: _effective_tier runs in a
+  # command substitution below and would otherwise reload them for every line.
+  _load_tiers ||:
+  _load_policy ||:
+  while IFS= read -r line; do
+    if [[ $line =~ $FINDING_HEADER_RE ]] && [[ $line =~ $label_re ]]; then
+      label=${BASH_REMATCH[0]}
+      code=''
+      [[ $line =~ BCS[0-9]{4} ]] && code=${BASH_REMATCH[0]} ||:
+      tier=''
+      [[ -z $code ]] || tier=$(_effective_tier "$code") || tier=''   # no tier data: keep the label
+      if [[ -n $tier ]]; then
+        [[ $tier != disabled ]] || continue
+        if [[ $tier == core ]] || ((strict)); then want='[ERROR]'; else want='[WARN]'; fi
+        line=${line/"$label"/"$want"}
+      fi
+    fi
+    printf '%s\n' "$line"
+  done <<< "$text"
 }
 
 # Register a path for process-exit cleanup (see _TMP_CLEANUP).
@@ -2139,12 +2176,16 @@ $numbered_script"
     local -- shown=$result
     if [[ -n $tier_filter || -n $min_tier_filter ]]; then
       shown=$(_filter_by_tier "$result" "$tier_filter" "$min_tier_filter")
-      # Filtering everything away means the script IS clean at the tier asked
-      # for, and the output contract promises the clean line for that. Printing
-      # nothing would leave a consumer grepping for it with silence. An empty
-      # $result is the other case -- an API anomaly, already exit 5 above.
-      [[ -n $result && -z $shown ]] && shown=$CLEAN_LINE ||:
     fi
+    # Severity from the tier, not the model's label; reapplied on every run
+    # for the same reason as the filter.
+    shown=$(_relabel_by_tier "$shown" "$strict")
+    # Filtering everything away (or dropping every finding as disabled) means
+    # the script IS clean at the tier asked for, and the output contract
+    # promises the clean line for that. Printing nothing would leave a
+    # consumer grepping for it with silence. An empty $result is the other
+    # case -- an API anomaly, already exit 5 above.
+    [[ -n $result && -z $shown ]] && shown=$CLEAN_LINE ||:
     [[ -z $shown ]] || echo "$shown"
     # Severity-based exit: any [ERROR] finding promotes exit code to 1
     if ((exit_code == 0)) && _has_error_finding "$shown"; then

@@ -377,6 +377,12 @@ finding per line, shaped "[ERROR|WARN] BCSxxxx line N: <defect>. Fix: <remedy>",
 and nothing else. A compliant script prints the
 single line "No BCS violations found." and exits 0. Only a finding header
 promotes the exit code; a sentence that merely mentions [ERROR] does not.
+The tag is not the model's: each header is relabelled from the cited rule's
+tier, honouring policy.conf, before it is printed (core [ERROR], recommended
+and style [WARN], every tiered finding [ERROR] under
+.BR \-\-strict ).
+A finding for a rule policy.conf disables is dropped; one citing a code with no
+tier keeps the model's tag.
 .TP
 .B 2
 Usage error (unknown command, unexpected argument).

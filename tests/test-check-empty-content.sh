@@ -29,11 +29,11 @@ declare -r ANTHROPIC_EMPTY='{"content":[{"type":"thinking","thinking":"..."}],
   "usage":{"input_tokens":31000,"output_tokens":5}}'
 declare -r OLLAMA_EMPTY='{"message":{"role":"assistant","content":""},
   "prompt_eval_count":31000,"eval_count":0}'
-declare -r FINDING='[WARN] BCS0202 line 8: variable not declared local'
-declare -r OPENAI_OK='{"choices":[{"message":{"content":"[WARN] BCS0202 line 8: variable not declared local"},
+declare -r FINDING='[WARN] BCS0201 line 8: declaration has no type separator'  # style tier: [WARN] survives the tier relabelling, exit 0
+declare -r OPENAI_OK='{"choices":[{"message":{"content":"[WARN] BCS0201 line 8: declaration has no type separator"},
   "finish_reason":"stop"}],"usage":{"prompt_tokens":31000,"completion_tokens":20}}'
 declare -r GOOGLE_MULTIPART='{"candidates":[{"content":{"parts":[
-  {"text":"[WARN] BCS0202 line 8: "},{"text":"variable not declared local"}]},
+  {"text":"[WARN] BCS0201 line 8: "},{"text":"declaration has no type separator"}]},
   "finishReason":"STOP"}],
   "usageMetadata":{"promptTokenCount":31000,"candidatesTokenCount":20}}'
 
