@@ -147,15 +147,20 @@ read_into ANSWER
 
 **Tier:** core
 
-Validate and sanitize all user input. Use whitelist over blacklist. Pass `--` before any pathname operand that originates from variables or user input (`rm -- "$f"`, `cp -- "$src" "$dst"`) to prevent option injection via filenames beginning with `-`; `find` needs a different guard (below).
+Validate and sanitize all user input. Use whitelist over blacklist. Guard any pathname operand that originates from variables or user input against option injection through a leading `-`: with `--` where the program supports it (`rm -- "$f"`, `cp -- "$src" "$dst"`), otherwise with an operand that cannot begin with `-` (below).
 
 **Integers from outside.** Bash evaluates as arithmetic whatever reaches `declare -i`, `local -i`, an integer variable's assignment, `(( ))`, `$(( ))` or an array index, and an array subscript inside the value runs as a command: `n='a[$(cmd)]'; local -i x=$n` runs `cmd`. A value from outside the script (the command line, which includes the parameters of `main "$@"`; the environment; a config file; another program) must match an integer pattern (`^[0-9]+$`, or `^-?[0-9]+$` where negatives are allowed) before it gets there; check it once, where it enters. A value the script computed itself, a literal, `$#`, `$?` and `$!` need no check, and neither does a helper's parameter when every caller passes such a value.
 
 **Another program's output: the form decides, not the command's name.** Output that is a bare number whatever the data holds is a value the script computed and needs no check: `wc -l < "$f"` and `wc -c < "$f"` (the file on a redirection), `stat -c %s -- "$f"` (a format with no `%n`), `grep -c -- "$pat" "$f"` (one file), `date +%s`, `id -u`, `nproc`. Output that can carry outside text is outside: `wc -l -- "$f"` and `du -- "$f"` print the file name after the number, `stat -c '%s %n'` and `grep -c` over several files print names, and `cut`, `awk`, `sed`, `jq`, `head` and `curl` relay whatever the data holds. A file named `+BASH_VERSINFO[$(cmd)]` turns `n=$(wc -l -- "$f")` into a command when `n` is an integer.
 
-**Scope of `--`.** Every command that takes a pathname operand, read-only ones and builtins included: `cat`, `head`, `sort`, `grep`, `wc`, `stat`, `diff`, `source` and `cd` parse a leading dash exactly as `rm` does, and "read-only" is no defence — a file named `-o/etc/cron.d/job` turns `sort "$f"` into a write. The `--` is owed when an operand **begins with an expansion** (`"$f"`, `"$dir"/x`, `"${files[@]}"`, `"$(cmd)"/x`). It is **not** owed, and its absence is never a finding, when the operand begins with literal text (`./"$f"`, `/etc/"$name"`: it cannot start with a dash), when the variable is an option's argument (`sort -o "$out"`, `grep -f "$patterns"`), for a redirection (`< "$file"`), inside `[[ ]]`, or for a command that takes no pathname (`echo`, `printf`, `tr`). Place it before the first operand, which is not always the pathname: `grep -- "$pattern" "$file"`, `chmod -- 644 "$f"`, `awk -- 'prog' "$f"` (after the program, `awk` reads `--` as a filename).
+**Option injection: guard every pathname operand that begins with an expansion.** An operand such as `"$f"`, `"$dir"/x`, `"${files[@]}"` or `"$(cmd)"/x` can begin with `-`, and the program then reads it as an option: a file named `-o/etc/cron.d/job` turns `sort "$f"` into a write, so "read-only" is no defence. How it is guarded depends on the program:
 
-**`find` is the exception: `--` does not protect a starting point.** `find` reads a word that begins with `-` as the start of its expression even after `--`, so `find -- "$dir" -type f` with `dir=-delete` deletes everything under the current directory (GNU findutils). A starting point that begins with an expansion must be one that cannot begin with a dash: an absolute path (`realpath` output) or a relative one given `./`. Guard the `./`, because it turns an absolute path into a relative one (`/etc` becomes `.//etc`): `[[ $dir == /* ]] || dir=./$dir`. A `--` before a starting point that is already safe is redundant, not a finding.
+- **A program that supports `--`** accepts it as the end of its options and reads every later word as an operand. The GNU coreutils (`rm`, `cp`, `mv`, `cat`, `head`, `tail`, `sort`, `wc`, `stat`, `du`, `chmod`, `ln`, `mkdir`, `ls`, `realpath`, `basename`, `dirname` ...), `diff`, `grep`, `sed`, `awk`, `shellcheck` and the Bash builtins `cd` and `source` all do. For these `--` is the guard, owed even when the variable holds an absolute path. Place it before the first operand, which is not always the pathname: `grep -- "$pattern" "$file"`, `chmod -- 644 "$f"`, `awk -- 'prog' "$f"`.
+- **A program that does not support `--`** needs an operand that cannot begin with `-`: an absolute path (`realpath` output) or `./` before a relative one, added only when the path is relative, because `./` turns `/etc` into `.//etc`, which is relative: `[[ $f == /* ]] || f=./$f`.
+
+**`--` is only for programs that support it.** Elsewhere it guards nothing, or becomes data: `find` reads a word that begins with `-` as the start of its expression even after `--`, so `find -- "$dir" -type f` with `dir=-delete` deletes everything under the current directory (GNU findutils); `awk` after its program text opens `--` as a file; `echo -- x` prints `-- x`. For such a program an operand that can begin with `-` is a finding whether or not `--` stands before it. Where support is in doubt, read the program's manual or probe it: `prog -- -x` must take `-x` as an operand. A `--` before an operand that is already safe (`find -- "$abs"`) changes nothing and is not a finding, but do not write one.
+
+No guard is owed, and its absence is never a finding, when the operand begins with literal text (`./"$f"`, `/etc/"$name"`: it cannot start with a dash), when the variable is an option's argument (`sort -o "$out"`, `grep -f "$patterns"`), for a redirection (`< "$file"`), inside `[[ ]]`, or for a command that takes no pathname (`echo`, `printf`, `tr`).
 
 ```bash
 # correct — validate integer before any arithmetic context sees it
@@ -198,7 +203,7 @@ real_path=$(realpath -e -- "$path")
 # (an allowed-character class alone admits '..' and '.hidden')
 [[ $name =~ ^[a-zA-Z0-9_][a-zA-Z0-9._-]*$ ]] || die 22 "Invalid filename ${name@Q}"
 
-# correct — -- before pathname operands from variables or input
+# correct — -- before pathname operands, for programs that support it
 rm -- "$user_file"
 cp -- "$source" "$dest"
 
@@ -213,22 +218,32 @@ sort "$file"
 head -n 5 "$file"
 cat "$dir"/"$name"
 
-# correct — no -- owed: literal-leading operand, option-argument, redirection
+# wrong — rm supports --, so it is owed even before realpath output
+target=$(realpath -e -- "$input") || die 3 "Not found ${input@Q}"
+rm "$target"
+
+# correct — no guard owed: literal-leading operand, option-argument, redirection
 cat ./"$name"
 wc -l /var/log/"$SCRIPT_NAME".log
 sort -o "$output" -- "$input"
 content=$(< "$file")
 
+# wrong — awk supports -- only before its program text; after it, awk opens -- as a file
+awk '{print $1}' -- "$file"
+
 # wrong — find reads a dash-leading starting point as its expression, even
 # after --: dir='-delete' deletes everything under the current directory
 find -- "$dir" -type f
 
-# correct — a find starting point that cannot begin with a dash
+# correct — find does not support -- here: give it a starting point that cannot begin with a dash
 [[ $dir == /* ]] || dir=./$dir
 find "$dir" -type f
 
-# not a finding — a redundant -- before an absolute starting point
+# correct — realpath output is absolute, so it cannot begin with a dash
 dir=$(realpath -e -- "$input") || die 3 "Directory not found ${input@Q}"
+find "$dir" -maxdepth 1 -type f
+
+# not a finding, though it changes nothing: -- before a starting point that is already safe
 find -- "$dir" -maxdepth 1 -type f
 ```
 
