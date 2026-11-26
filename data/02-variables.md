@@ -36,6 +36,8 @@ one variable.
 
 The `--` separator for string variable types is **purely semantic** -- it signals a conscious variable type choice, completing the pattern alongside `-i`, `-a`, and `-A`.
 
+An integer declaration evaluates its value as an arithmetic expression, so `declare -i n=$value` runs any command substitution hidden in an array subscript inside `$value`. A value from outside the script must be validated before it reaches `-i`; BCS1005 owns that finding.
+
 ## BCS0202 Variable Scoping
 
 **Tier:** core
@@ -91,7 +93,7 @@ readonly MAX_RETRIES=3                # UPPER_CASE for constants/globals
 declare -i VERBOSE=1                  # UPPER_CASE for global state
 
 process_log_file() {                  # lower_case for functions
-  local -- file_count=0               # lower_case for locals
+  local -i file_count=0               # lower_case for locals
 }
 
 _validate_input() { :; }              # underscore prefix for private functions
@@ -284,4 +286,4 @@ run_action() {
 eval "$1=\$2"
 ```
 
-Name the nameref distinctly from any caller variable; a nameref that resolves to its own name is a fatal circular reference. Namerefs require Bash 4.3+ (BCS targets 5.2).
+Name the nameref distinctly from any caller variable. A nameref that resolves to its own name is not fatal, which makes it worse: Bash prints a `circular name reference` warning and carries on, and the assignment lands on the wrong variable (a caller's local of that name is left unchanged). A target name taken from outside the script must be validated first, because an array subscript inside the name is evaluated; BCS1004 owns that finding. Namerefs require Bash 4.3+ (BCS targets 5.2).

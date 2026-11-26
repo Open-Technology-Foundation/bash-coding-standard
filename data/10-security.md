@@ -103,10 +103,10 @@ Never use `eval` with untrusted input. Almost every use case has a safer alterna
 local -a cmd=(find -- "$path" -name "$pattern")
 "${cmd[@]}"
 
-# correct — indirect expansion
+# correct — indirect expansion (var_name validated as below)
 echo "${!var_name}"
 
-# correct — printf -v for dynamic assignment
+# correct — printf -v for dynamic assignment (var_name validated as below)
 printf -v "$var_name" '%s' "$value"
 
 # correct — associative arrays for dynamic data
@@ -125,17 +125,51 @@ eval "$var_name='$value'"
 eval "${action}_function"
 ```
 
+**A variable name is code.** The alternatives above are not eval-free when the name comes from outside the script. `${!name}`, `printf -v "$name"`, `local -n ref=$name` and `unset "$name"` all accept an array subscript inside the name, and Bash evaluates that subscript as arithmetic: a name of `a[$(cmd)]` runs `cmd`. A name from outside the script (the command line, which includes the parameters of `main "$@"`; the environment; a file; another program) must match `^[a-zA-Z_][a-zA-Z0-9_]*$` before it reaches any of them; check it once, where it enters. A literal needs no check, and neither does a helper's parameter when every caller passes a name the script wrote. The keys of an associative array are data, not names, so `data["$key"]` is safe with any key.
+
+```bash
+# correct — validate a name from outside the script before indirection
+[[ $var_name =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || die 22 "Invalid variable name ${var_name@Q}"
+printf -v "$var_name" '%s' "$value"
+
+# wrong — main's parameters are the command line: a name of 'x[$(cmd)]' runs cmd
+main() { printf -v "$1" '%s' "$value"; echo "${!2}"; }
+
+# not a finding — a literal the script itself wrote
+local -n result_ref=RESULT
+
+# not a finding — a helper whose every caller passes a name the script wrote
+read_into() { local -n out=$1; IFS= read -r out; }
+read_into ANSWER
+```
+
 ## BCS1005 Input Sanitization
 
 **Tier:** core
 
 Validate and sanitize all user input. Use whitelist over blacklist. Pass `--` before any pathname operand that originates from variables or user input (`rm -- "$f"`, `cp -- "$src" "$dst"`) to prevent option injection via filenames beginning with `-`.
 
+**Integers from outside.** Bash evaluates as arithmetic whatever reaches `declare -i`, `local -i`, an integer variable's assignment, `(( ))`, `$(( ))` or an array index, and an array subscript inside the value runs as a command: `n='a[$(cmd)]'; local -i x=$n` runs `cmd`. A value from outside the script (the command line, which includes the parameters of `main "$@"`; the environment; a config file; another program) must match an integer pattern (`^[0-9]+$`, or `^-?[0-9]+$` where negatives are allowed) before it gets there; check it once, where it enters. A value the script computed itself, a literal, `$#`, `$?` and `$!` need no check, and neither does a helper's parameter when every caller passes such a value.
+
 **Scope of `--`.** Every command that takes a pathname operand, read-only ones and builtins included: `cat`, `head`, `sort`, `grep`, `wc`, `stat`, `diff`, `source` and `cd` parse a leading dash exactly as `rm` does, and "read-only" is no defence — a file named `-o/etc/cron.d/job` turns `sort "$f"` into a write. The `--` is owed when an operand **begins with an expansion** (`"$f"`, `"$dir"/x`, `"${files[@]}"`, `"$(cmd)"/x`). It is **not** owed, and its absence is never a finding, when the operand begins with literal text (`./"$f"`, `/etc/"$name"`: it cannot start with a dash), when the variable is an option's argument (`sort -o "$out"`, `grep -f "$patterns"`), for a redirection (`< "$file"`), inside `[[ ]]`, or for a command that takes no pathname (`echo`, `printf`, `tr`). Place it before the first operand, which is not always the pathname: `grep -- "$pattern" "$file"`, `chmod -- 644 "$f"`, `awk -- 'prog' "$f"` (after the program, `awk` reads `--` as a filename).
 
 ```bash
-# correct — validate integer
+# correct — validate integer before any arithmetic context sees it
 [[ $input =~ ^-?[0-9]+$ ]] || die 22 "Invalid integer: ${input@Q}"
+local -i count=$input
+
+# wrong — the environment value goes straight to an integer declaration
+declare -i RETRIES=${RETRIES:-3}
+
+# wrong — main's parameters are the command line (main "$@")
+main() { local -i retries=${2:-3}; }
+
+# not a finding — the script's own values
+local -i total=$((count * 2)) nargs=$#
+
+# not a finding — a helper whose every caller passes the script's own value
+cleanup() { local -i exitcode=${1:-$?}; trap - EXIT; exit "$exitcode"; }
+trap 'cleanup $?' EXIT
 
 # correct — validate path within allowed directory
 # allowed_dir must be canonical (realpath output) with no trailing slash
@@ -168,6 +202,8 @@ sort -o "$output" -- "$input"
 content=$(< "$file")
 ```
 
+`realpath -e` requires the path to exist; for an output path that does not exist yet, `realpath -m` resolves it without that requirement. Ranges such as `a-z` follow the locale's collation, so under `en_US.UTF-8` they also admit accented letters such as `é`. The patterns here stay safe that way (a letter is never a separator, a quote or a leading dash); where only ASCII may pass, test under `LC_ALL=C`.
+
 Validate early, fail securely with clear errors, run with minimum necessary permissions.
 
 ## BCS1006 Temporary File Handling
@@ -196,8 +232,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# correct — custom template
-mktemp /tmp/"$SCRIPT_NAME".XXXXXX
+# correct — custom template; --tmpdir honours $TMPDIR (default /tmp)
+temp_file=$(mktemp --tmpdir -- "$SCRIPT_NAME".XXXXXX) || die 1 'Failed to create temp file'
 
 # wrong
 echo data > /tmp/myapp_temp.txt      # predictable path
@@ -228,9 +264,12 @@ Scripts that merely run a pipeline of well-known commands (`grep`, `awk`, `curl`
 # correct — explicit scrubbing before exec in a privileged wrapper
 unset LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT \
       PYTHONPATH PERL5LIB RUBYLIB NODE_PATH \
-      BASH_ENV ENV SHELLOPTS
+      BASH_ENV ENV
+export -n SHELLOPTS BASHOPTS         # readonly: cannot be unset, so stop exporting them
 exec /usr/libexec/myapp/helper "$@"
 ```
+
+`SHELLOPTS` and `BASHOPTS` are readonly; `unset` of either fails, which under `set -e` ends the script before the `exec`. `export -n` keeps them out of the child's environment. A denylist is a minimum, never a complete scrub: it misses exported Bash functions (`BASH_FUNC_name%%`) and loader variables added after it was written. Prefer `env -i` where the helper allows it.
 
 **Stronger -- `env -i` for a fully-reset environment** (PATH must be set explicitly):
 

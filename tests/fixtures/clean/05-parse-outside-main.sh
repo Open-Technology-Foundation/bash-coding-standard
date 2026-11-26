@@ -20,7 +20,7 @@ noarg() { (($# > 1)) || die 22 "Option ${1@Q} requires an argument"; }
 
 cleanup() {
   local -i exitcode=${1:-$?}
-  trap - SIGINT SIGTERM EXIT
+  trap - EXIT
   [[ -z $TEMP_FILE ]] || rm -f -- "$TEMP_FILE"
   exit "$exitcode"
 }
@@ -59,7 +59,7 @@ main() {
   local -- dir
   dir=$(realpath -e -- "$TARGET_DIR") || die 3 "Directory not found ${TARGET_DIR@Q}"
   [[ -d $dir ]] || die 3 "Not a directory ${dir@Q}"
-  trap 'cleanup $?' SIGINT SIGTERM EXIT
+  trap 'cleanup $?' EXIT
   TEMP_FILE=$(mktemp) || die 1 'Failed to create temp file'
   report "$dir"
 }

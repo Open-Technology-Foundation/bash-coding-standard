@@ -167,17 +167,17 @@ info 'Validating environment...'
 warn 'Deprecated option used'
 error 'Connection failed'
 
-# correct — echo for data and help
-echo "$result"                       # data output
+# correct — printf or echo for data and help
+printf '%s\n' "$result"              # data output; echo would swallow a value of -n or -e
 echo "$SCRIPT_NAME $VERSION"         # version output
 # help text
 cat <<HELP
 ...
 HELP
 
-# correct — functions returning data use echo
+# correct — functions returning data write it to stdout
 get_value() {
-  echo "$result"                     # stdout for callers to capture
+  printf '%s\n' "$result"            # stdout for callers to capture
 }
 
 # wrong — mixing streams
@@ -248,10 +248,11 @@ else
   echo '50% complete'
 fi
 
-# correct — hide cursor during TUI, restore on exit
+# correct — hide cursor during TUI, restore on exit; the trap goes first (BCS0110),
+# and a script with a cleanup() puts the restore there instead (one trap per signal)
 if [[ -t 1 ]]; then
-  printf '\033[?25l'                   # hide cursor
   trap 'printf "\033[?25h"' EXIT       # restore on exit
+  printf '\033[?25l'                   # hide cursor
 fi
 
 # wrong — cursor escape leaks into pipes and logs
@@ -269,11 +270,12 @@ Get terminal dimensions dynamically.
 ```bash
 # correct
 trap 'get_terminal_size' WINCH
-cols=$(tput cols 2>/dev/null || echo 80)
+cols=$(tput cols 2>/dev/null || echo 80)   # no terminal (cron, pipe): tput complains; use 80
 
 # correct — check Unicode support (guarded; bare [[ ]] would trip errexit)
 declare -i UNICODE=0
-[[ ${LC_ALL:-${LC_CTYPE:-${LANG:-}}} == *UTF-8* ]] && UNICODE=1 ||:
+declare -- locale=${LC_ALL:-${LC_CTYPE:-${LANG:-}}}
+[[ ${locale,,} =~ utf-?8 ]] && UNICODE=1 ||:   # en_US.UTF-8, C.utf8, en_US.utf8 alike
 ```
 
 Never hardcode terminal width. Provide graceful fallbacks for limited terminals.
@@ -296,7 +298,7 @@ yn() {
 yn 'Deploy to production?' || die 0 'Cancelled'
 ```
 
-A confirmation must be suppressible, so the script can run unattended: either `yn()` returns success when `PROMPT` is 0 (declared in BCS0701, cleared by `-N`/`--no-prompt`, BCS0806), as above, or every call is guarded by `((PROMPT))`. A guard in either place satisfies this rule; a confirmation that cannot be switched off is a violation.
+A confirmation must be suppressible, so the script can run unattended: either `yn()` returns success when `PROMPT` is 0 (declared in BCS0701, cleared by `-f`/`--force`, BCS0806), as above, or every call is guarded by `((PROMPT))`. A guard in either place satisfies this rule; a confirmation that cannot be switched off is a violation.
 
 ## BCS0710 Standard Icons
 
@@ -334,3 +336,5 @@ somecommand >>logfile 2>&1
 ```
 
 Use `2>/dev/null` or `2>file` when suppressing only stderr. The `&>` operator is for combined (stdout + stderr) redirection only.
+
+`&>` also cannot be written in the wrong order. Redirections apply left to right, so `cmd 2>&1 >file` points stderr at the original stdout before stdout moves to `file`: stderr never reaches the file.

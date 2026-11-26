@@ -5,10 +5,10 @@ This section summarises key rules that are frequently misapplied during automate
 
 ## Severity
 
-- **VIOLATION**: Code is incorrect, unsafe, or clearly breaks a mandatory (MUST/SHALL) rule.
-- **WARNING**: Style deviation, SHOULD/RECOMMENDED level, or intentional design choice that deviates from a reference pattern.
+- **VIOLATION**: a finding under a `core`-tier rule.
+- **WARNING**: a finding under a `recommended`- or `style`-tier rule, including an intentional design choice that deviates from a reference pattern.
 
-When a rule says "prefer X over Y", using Y is a WARNING at most — not a VIOLATION.
+A "prefer X over Y" clause inside a core rule is not part of what that rule enforces. Report Y, if at all, under the recommended- or style-tier rule that owns the preference (BCS0505 for increment style, for example), whose tier makes it a WARNING.
 
 A finding's severity comes from the rule's **Tier:** line and from nothing else: a `core` rule yields a VIOLATION, reported as `[ERROR]`; a `recommended` or `style` rule yields a WARNING, reported as `[WARN]`. Words such as "must" or "mandatory" inside a recommended- or style-tier rule say how to satisfy that rule; they do not raise its findings to `[ERROR]`.
 
@@ -58,4 +58,4 @@ The `IFS=value command` form modifies IFS only for the duration of that command.
 - `return 0` from `main()` instead of `exit 0` — functionally equivalent for non-sourced scripts (WARNING at most, not VIOLATION)
 - Config search paths adjusted from the BCS0111 reference order — acceptable when documented in help text
 - `local` declarations between logical sections within a function — permitted by BCS0401 ("Declarations may appear mid-body... between logical sections"), only prohibited inside loops
-- Option bundling includes arg-taking options — BCS0805 documents that the user must place arg-taking options last in a bundle; this is the user's responsibility, not a script defect
+- Option bundling includes arg-taking options — BCS0805 documents that the user must place arg-taking options last in a bundle; this is the user's responsibility, not a script defect. The argument itself is always a separate word (`-vo FILE`, never `-voFILE` or `--output=FILE`; BCS0801)

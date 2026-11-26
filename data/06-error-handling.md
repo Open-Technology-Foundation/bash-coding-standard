@@ -13,6 +13,8 @@ Scripts run under `set -euo pipefail` (BCS0101). Handle expected failures explic
 
 `set -euo pipefail` provides three protections: `-e` exits on command failure, `-u` exits on undefined variables, `-o pipefail` fails pipeline if any command fails.
 
+`-e` has one blind spot to design around: a function called as the condition of `if`, `while`, `&&` or `||` runs with `-e` suspended for its whole call tree, with or without `inherit_errexit`. Inside `if fn; then` or `fn || die`, a failing command in `fn` does not stop it, and `fn` returns the status of its last command. A function meant to be called that way checks its own critical steps (BCS0604).
+
 ```bash
 # correct — allow expected failures
 command_that_might_fail ||:
@@ -111,11 +113,11 @@ declare -- TEMP_FILE
 #...
 cleanup() {
   local -i exitcode=${1:-$?}
-  trap - SIGINT SIGTERM EXIT         # prevent recursion
+  trap - EXIT                        # prevent recursion
   [[ -z ${TEMP_FILE:-} ]] || rm -f -- "$TEMP_FILE"
   exit "$exitcode"
 }
-trap 'cleanup $?' SIGINT SIGTERM EXIT
+trap 'cleanup $?' EXIT
 #...
 TEMP_FILE=$(mktemp) || die 1 'Failed to create temp file'
 readonly TEMP_FILE
@@ -128,7 +130,7 @@ Use single quotes for trap commands to delay variable expansion. Use `||:` for c
 trap 'rm -f -- "$temp_file"' EXIT
 
 # correct — kill background processes in cleanup
-((bg_pid)) && kill "$bg_pid" 2>/dev/null ||:
+((bg_pid)) && kill "$bg_pid" 2>/dev/null ||:   # the job may have exited already
 
 # wrong — double quotes expand immediately
 trap "rm -f $temp_file" EXIT
@@ -138,6 +140,18 @@ trap 'rm -f -- "$temp_file"; exit 0' EXIT
 ```
 
 The handler must propagate the script's exit status: pass `$?` in (`trap 'cleanup $?' ...`) and finish with `exit "$exitcode"`, as in the example above. A trap that ends in `exit 0`, or any fixed status, hides the failure from the caller.
+
+**Signals.** Trap `EXIT` alone for cleanup. When a fatal signal (INT, TERM, HUP) kills the script, Bash still runs the EXIT trap and then dies by that signal, so the caller sees 130, 143 or 129. Adding `SIGINT SIGTERM` to the `cleanup $?` trap turns that death into an ordinary exit with whatever `$?` held when the signal arrived, which is **0** while the script is running builtins: an interrupted script reports success. A script that must react to INT or TERM itself maps each to its conventional status and leaves cleanup to EXIT:
+
+```bash
+# correct — EXIT does the cleanup; INT and TERM only set a non-zero status
+trap 'cleanup $?' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# wrong — a signal during builtins leaves $? at 0, so the interrupted script exits 0
+trap 'cleanup $?' SIGINT SIGTERM EXIT
+```
 
 Never combine multiple traps for the same signal (replaces previous). Use a single trap with a cleanup function.
 
@@ -164,9 +178,9 @@ if ! sort -- "$file" | uniq > "$output"; then
   die 1 'Pipeline failed'
 fi
 
-# correct — check $? immediately
-cmd1
-local -i result=$?
+# correct — capture the status; a bare cmd1 would let set -e abort before $? is read
+local -i result=0
+cmd1 || result=$?
 
 # wrong — a failure inside <( ) is invisible: diff silently compares against empty input
 diff -- <(failing_command) "$file"
@@ -192,6 +206,7 @@ A command run only inside a process substitution (`<(cmd)`) has no exit status a
 # correct — snapshot, then inspect each stage
 if ! sort -- "$file" | uniq | wc -l > "$output"; then
   local -a ps=("${PIPESTATUS[@]}")
+  local -i i
   for i in "${!ps[@]}"; do
     ((ps[i] == 0)) || error "Stage $i failed (exit ${ps[i]})"
   done
@@ -255,7 +270,8 @@ Under `set -e`, a false arithmetic condition (e.g., `((DRY_RUN))` when `DRY_RUN=
 ((DEBUG)) && set -x ||:
 ((VERBOSE < 3)) && VERBOSE+=1 ||:
 
-# wrong — missing ||:, script exits when flag is 0
+# wrong — missing ||:, the chain returns 1 when the flag is 0: fatal as a function's last
+# statement, inside $(...), or as the script's last command
 ((DRY_RUN)) && info 'Dry-run mode'
 ```
 
@@ -271,6 +287,6 @@ command -v curl >/dev/null || die 18 'curl required'
 
 The `||:` catches failure from **the entire chain**, including the arithmetic condition -- not just the final command. Use `:` over `true` (shorter, built-in, traditional shell idiom).
 
-**Style (preference only):** when `||:` is present, both the `&&...||:` form and the inverted `||` form are correct. Pick whichever reads more naturally -- short guard clauses favour inversion; flag-guarded actions often favour `&&...||:`. **Neither form alone is a violation.** LLM-based checkers MUST NOT report a rule violation for form choice when `||:` is properly present.
+**Style (preference only):** when `||:` is present, both the `&&...||:` form and the inverted `||` form are correct, as is an `if ((FLAG)); then ...; fi` block, which needs no `||:` and cannot hide a failure of the action. Pick whichever reads more naturally -- short guard clauses favour inversion; flag-guarded actions often favour `&&...||:`. **Neither form alone is a violation.** LLM-based checkers MUST NOT report a rule violation for form choice when `||:` is properly present.
 
 **Never:** never use `||:` for critical operations that must succeed -- it masks real failures.

@@ -102,8 +102,8 @@ The Bash Coding Standard defines **100 substantive rules plus 12 section overvie
 
 | Tier | Count | Severity | Behaviour |
 |------|-------|----------|-----------|
-| `core` | 34 | `[ERROR]` | Real correctness/safety bugs. Non-zero exit if any are found. |
-| `recommended` | 44 | `[WARN]` | Bash hygiene; prevents subtle issues. |
+| `core` | 33 | `[ERROR]` | Real correctness/safety bugs. Non-zero exit if any are found. |
+| `recommended` | 45 | `[WARN]` | Bash hygiene; prevents subtle issues. |
 | `style` | 22 | `[WARN]` | Taste; no correctness impact. |
 | `disabled` | -- | (silent) | Applied only via `policy.conf`; never reported. |
 
@@ -159,7 +159,7 @@ bcs template -t complete -n deploy -d 'Deploy script' -o deploy.sh -x
 
 ```bash
 bcs codes                  # All rules, tier-decorated
-bcs codes -T core          # Only core-tier rules (34)
+bcs codes -T core          # Only core-tier rules (33)
 bcs codes -E BCS0101       # Explain one rule
 bcs codes -p               # Plain output (no tier decoration)
 ```

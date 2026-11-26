@@ -55,7 +55,7 @@ Options:
   -v, --verbose   Enable verbose output (default)
   -q, --quiet     Disable verbose output
   -D, --debug     Enable debug output
-  -N, --no-prompt Assume yes; never wait on a confirmation
+  -f, --force     Assume yes; never wait on a confirmation
   -V, --version   Show version information
   -h, --help      Show this help message
 
@@ -87,14 +87,14 @@ main() {
       -D|--debug)
         DEBUG=1
         ;;
-      -N|--no-prompt)
+      -f|--force)
         PROMPT=0
         ;;
       --)
         shift
         break
         ;;
-      -[VhvqDN]?*) # Bundled short options
+      -[VhvqDf]?*) # Bundled short options
         set -- "${1:0:2}" "-${1:2}" "${@:2}"
         continue
         ;;

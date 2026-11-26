@@ -113,7 +113,7 @@ cat <<GREETING
 Hello $USER, your home is $HOME
 GREETING
 
-# correct — indented (strips leading tabs, not spaces)
+# correct — indented (strips leading tabs, not spaces; the one place BCS1201 allows tabs)
 if true; then
 	cat <<-CONTENT
 	indented content

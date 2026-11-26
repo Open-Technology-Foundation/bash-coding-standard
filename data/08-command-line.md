@@ -42,6 +42,10 @@ while (($#)); do case $1 in
   *)            FILES+=("$1") ;;
 esac; done
 
+# wrong — arms for attached option-arguments; the argument is always the next word
+--output=*)   OUTPUT=${1#*=} ;;
+-o?*)         OUTPUT=${1:2} ;;
+
 # wrong — several options handled by an if/elif chain instead of the loop
 if [[ $1 == -v || $1 == --verbose ]]; then
   VERBOSE=1
@@ -54,6 +58,7 @@ Key rules:
 - Use `(($#))` as the loop condition, not `[[ $# -gt 0 ]]` (house style; functionally equivalent)
 - The mandatory `shift` at loop end is critical — omitting it causes infinite loops
 - For options with arguments: `noarg "$@"; shift; variable=$1`
+- An option's argument is always a separate word, for short and long options alike (`-o FILE`, `--output FILE`). Attached forms (`-oFILE`, `--output=FILE`) are not part of a BCS interface: the loop has no arm for them, and help text documents only the separated form
 - For boolean flags: just set, no extra shift needed
 - For exit options (`--help`, `--version`): use `exit 0`, no shift needed
 - Use `continue` after option disaggregation to re-process expanded options
@@ -154,7 +159,18 @@ Place bundling case before `-*)` invalid option handler and after all explicit o
 
 Include arg-taking options in the character class. They work correctly when last in the bundle — the disaggregation peels them off as a separate `-X` flag, and `shift` in their case handler picks up the argument normally. Example: `-vno output.txt` disaggregates to `-v -n -o`, then `-o` consumes `output.txt` via `shift`. The user must place arg-taking options last; `-von file` would incorrectly disaggregate to `-v -o -n`.
 
-▲ Attached option-arguments (`-oFILE`) are NOT supported by this pattern — the disaggregator prepends `-` to the remainder, so `-ooutput.txt` becomes `-o -output.txt` and the handler silently captures `-output.txt` (`noarg` cannot catch it). Option arguments must be separate words: `-o FILE`.
+▲ Attached option-arguments (`-oFILE`) are NOT supported by this pattern — the disaggregator prepends `-` to the remainder, so `-ooutput.txt` becomes `-o -output.txt` and the handler silently captures `-output.txt` (`noarg` cannot catch it). Option arguments are always separate words, for short and long options alike: `-o FILE`, `--output FILE` (BCS0801).
+
+```bash
+# correct — the argument is the next word, bundled or not
+myscript -vn -o out.txt input.txt
+myscript -vno out.txt input.txt
+myscript --verbose --output out.txt input.txt
+
+# wrong — attached arguments are not part of a BCS interface
+myscript -oout.txt input.txt
+myscript --output=out.txt input.txt
+```
 
 ## BCS0806 Standard Options
 
@@ -184,7 +200,7 @@ Use consistent option letters and variable names across all BCS-compliant script
 |-------|------|----------|---------|---------|
 | `-n` | `--dry-run` | `DRY_RUN` | `0` or `1` | Preview without changes |
 | `-N` | `--not-dry-run` | `DRY_RUN` | `0` | Execute changes (cancels dry-run) |
-| `-f` | `--force` | `FORCE` | `0` | Skip confirmation prompts |
+| `-f` | `--force` | `PROMPT` | `1` | Skip confirmation prompts: sets `PROMPT=0` (BCS0701, BCS0709) |
 | `-D` | `--debug` | `DEBUG` | `0` | Enable debug output |
 | `-p` | `--port` | `PORT` | varies | Network port |
 | `-P` | `--prefix` | `PREFIX` | varies | Installation prefix |
@@ -193,18 +209,18 @@ Key rules:
 - **Avoid reassigning** a standard letter to a different purpose — `-v` is always verbose, never version
 - **Toggle pairs:** `-n`/`-N` and `-v`/`-q` are complementary toggles sharing a variable; a script that offers both halves spells them this way, but offering one half alone is not a finding
 - **DRY_RUN=1 default** for destructive scripts — require `-N` to execute; use `DRY_RUN=0` for non-destructive scripts
-- **Use `declare -i`** for all flag variables: `declare -i VERBOSE=1 DRY_RUN=0 DEBUG=0 FORCE=0`
+- **Use `declare -i`** for all flag variables: `declare -i VERBOSE=1 DRY_RUN=0 DEBUG=0 PROMPT=1`
 
 ```bash
 # correct — standard options with consistent letters and variables
-declare -i VERBOSE=1 DRY_RUN=0 DEBUG=0 FORCE=0
+declare -i VERBOSE=1 DRY_RUN=0 DEBUG=0 PROMPT=1
 
 while (($#)); do case $1 in
   -v|--verbose)     VERBOSE=1 ;;
   -q|--quiet)       VERBOSE=0 ;;
   -n|--dry-run)     DRY_RUN=1 ;;
   -N|--not-dry-run) DRY_RUN=0 ;;
-  -f|--force)       FORCE=1 ;;
+  -f|--force)       PROMPT=0 ;;
   -D|--debug)       DEBUG=1 ;;
   -V|--version)     echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
   -h|--help)        show_help; exit 0 ;;

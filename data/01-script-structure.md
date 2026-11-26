@@ -14,7 +14,7 @@ Every BCS-compliant script follows a 13-step structure. Scripts must be self-con
 ```bash
 # correct
 #!/usr/bin/bash
-#shellcheck disable=SC???? # (optional)
+#shellcheck disable=SC????  # (optional) why the warning does not apply
 # Brief description (recommended)
 set -euo pipefail
 shopt -s inherit_errexit
@@ -102,6 +102,7 @@ local -a search_paths=(
   /usr/local/share/myapp/data
   /usr/share/myapp/data
 )
+local -- dir
 for dir in "${search_paths[@]}"; do
   [[ -d $dir ]] && { DATA_DIR="$dir"; break; }
 done
@@ -149,7 +150,7 @@ Always check BOTH stdout AND stderr: `[[ -t 1 && -t 2 ]]`.
 
 ## BCS0106 File Extensions and Dual-Purpose Scripts
 
-**Tier:** core
+**Tier:** recommended
 
 Executables: `.sh` extension or no extension. Globally available executables via PATH must have no extension. Libraries must have `.sh` or `.bash` extension and should not be executable.
 
@@ -286,11 +287,11 @@ declare -- TEMP_DIR
 #...
 cleanup() {
   local -i exitcode=${1:-$?}
-  trap - SIGINT SIGTERM EXIT
+  trap - EXIT
   [[ -z ${TEMP_DIR:-} ]] || rm -rf -- "$TEMP_DIR"
   exit "$exitcode"
 }
-trap 'cleanup $?' SIGINT SIGTERM EXIT
+trap 'cleanup $?' EXIT
 #...
 TEMP_DIR=$(mktemp -d) || die 1 'Failed to create temp dir'
 ```

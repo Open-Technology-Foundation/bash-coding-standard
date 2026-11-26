@@ -92,10 +92,12 @@ done
 
 # wrong
 for f in $(ls *.txt); do             # never parse ls
-for ((i=0; i<10; i++)); do           # use i+=1 — increment policy: see BCS0505
-while (($# > 0)); do                 # use (($#)) instead
 while read line; do                  # IFS= read -r: -r keeps backslashes, IFS= keeps blanks
 for f in *.log; do process "$f"; done   # without nullglob, processes the literal '*.log'
+
+# style preference — not errors under this rule (increment policy: BCS0505)
+for ((i=0; i<10; i++)); do           # prefer i+=1
+while (($# > 0)); do                 # prefer (($#))
 ```
 
 Read lines with `IFS= read -r`: without `-r` backslashes are mangled, without `IFS=` leading and trailing whitespace is stripped.
@@ -205,7 +207,7 @@ declare -i count=0
 count+=1                             # increment
 
 # correct — arithmetic conditional
-((count > 10)) && warn 'High count'  # no $ needed inside (())
+((count > 10)) && warn 'High count' ||:  # no $ needed inside (()); ||: per BCS0606
 
 # correct — assignment via arithmetic expansion never affects exit status
 result=$((x + y))
@@ -230,10 +232,15 @@ Bash only supports integer arithmetic. Use `bc -l` or `awk` for floating-point.
 result=$(echo 'scale=2; 10 / 3' | bc -l)
 result=$(awk -v a="$a" -v b="$b" 'BEGIN {printf "%.2f", a * b}')
 
-# correct — float comparison
-if (($(echo "$a > $b" | bc -l))); then
+# correct — float comparison: validate both operands, then let awk's exit status answer
+[[ $a =~ ^-?[0-9]+([.][0-9]+)?$ && $b =~ ^-?[0-9]+([.][0-9]+)?$ ]] || die 22 'Not a decimal number'
+if awk -v a="$a" -v b="$b" 'BEGIN { exit !(a > b) }'; then
   echo 'a is greater'
 fi
+
+# wrong — bc evaluates its input as code, and (( )) evaluates bc's output again: a crafted
+# value runs commands; a malformed one makes bc print nothing, which (( )) reads as false
+if (($(echo "$a > $b" | bc -l))); then echo 'a is greater'; fi
 
 # wrong
 [[ "$a" > "$b" ]]                    # string comparison, not numeric

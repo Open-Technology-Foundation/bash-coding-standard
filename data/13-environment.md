@@ -79,6 +79,15 @@ When `1`, stdout is a single JSON object shaped like `shellcheck --format=json1`
 
 When `1`, `shellcheck --format=json -x` runs over the target script and the JSON report is prepended to the LLM user prompt as static-analysis context. Auto-skipped when `shellcheck` is not on `PATH`.
 
+### `BCS_CACHE`
+
+- **Default:** `1` (enabled)
+- **Values:** `0` or `1`
+- **Override flag:** `--cache`, `--no-cache`
+- **Consumed:** `cmd_check()` initialiser
+
+When `1`, a successful, non-empty result is stored under `$XDG_CACHE_HOME/bcs/`, keyed on every input that can change the answer (version, backend, model, effort, flags, tier filters, policy text, shellcheck report, script and standard), and an identical later check is answered from the cache without an LLM call. `0` disables both the read and the write. Like the other integer flags, a value that is not a non-negative integer is refused with exit 22.
+
 ### `BCS_TIER`
 
 - **Default:** unset (no tier filter)
@@ -120,7 +129,7 @@ Extend or override in `bcs.conf`:
 
 ```bash
 MODEL_ALIASES[mymodel]=qwen3.5:14b
-MODEL_ALIASES[sonnet]=claude-sonnet-4-7   # repoint a built-in alias
+MODEL_ALIASES[sonnet]=claude-sonnet-5     # repoint a built-in alias
 ```
 
 Unknown names pass through `_expand_alias()` unchanged, so canonical model IDs need no alias entry. To pin a model across sessions, set `BCS_MODEL` to an alias or canonical ID in `bcs.conf`.
@@ -185,6 +194,12 @@ XDG Base Directory variables that locate `bcs.conf` and the response dump. Stand
 - **Affects:** `bcs.conf` and `policy.conf` cascade — `$XDG_CONFIG_HOME/bcs/bcs.conf` is the user-level config layer (overrides `/etc/bcs.conf`, `/etc/bcs/bcs.conf`, `/usr/local/etc/bcs/bcs.conf`)
 - **Consumed:** `_conf_search_paths()`; policy resolution in `_load_policy()`
 
+### `XDG_CACHE_HOME`
+
+- **Default:** `$HOME/.cache`
+- **Affects:** the result cache (`$XDG_CACHE_HOME/bcs/<sha256>`; see `BCS_CACHE`)
+- **Consumed:** `cmd_check()` cache setup
+
 ### `XDG_STATE_HOME`
 
 - **Default:** `$HOME/.local/state`
@@ -209,7 +224,7 @@ These variables are set by `bcs` itself at runtime. They are documented here so 
 
 - **Set by:** `cmd_check()` exports this from `--json` / `BCS_JSON`
 - **Values:** `0` or `1`
-- **Consumed:** all four `_llm_*` backend bodies
+- **Consumed:** four of the five `_llm_*` backend bodies (`_llm_anthropic` does not read it; its JSON request differs only in the prompt `cmd_check()` builds)
 
 When `1`, each backend flips its native JSON-output knob:
 
@@ -219,3 +234,11 @@ When `1`, each backend flips its native JSON-output knob:
 - Anthropic / Claude CLI → no native flag; rely on prompt discipline plus `_strip_json_fences()` fallback
 
 Override the flag via `-j`/`--json` or `BCS_JSON=1` rather than setting `BCS_JSON_MODE` directly. Setting it externally without taking the rest of the JSON-rendering path (envelope wrap, schema validation in `_render_json_output()`) produces inconsistent output.
+
+### `BCS_CHECK_ACTIVE`
+
+- **Set by:** `_llm_claude_cli()` exports `1` into the Claude Code CLI session it starts
+- **Values:** unset, or any non-empty value
+- **Consumed:** the recursion guard in `cmd_check()`, right after option parsing
+
+A `bcs check` that starts while this variable is set exits 1 with `Recursive bcs check detected` instead of nesting a second LLM call inside the first. It stops an agent with shell access, or a user hook, from calling `bcs check` from within a check. A stale value left in an interactive shell blocks every check until it is unset.

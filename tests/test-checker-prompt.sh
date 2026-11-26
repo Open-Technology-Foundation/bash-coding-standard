@@ -186,5 +186,52 @@ assert_equal '8000 low' \
   "$(jq -r '"\(.max_completion_tokens) \(.reasoning_effort)"' "$PAYLOAD_FILE")" \
   'no -e -> medium (8000 output tokens, reasoning_effort=low)' ||:
 
+# ---- Prompts larger than one argument string ----
+# Linux refuses any single argv or environment string over 128 KiB
+# (MAX_ARG_STRLEN, E2BIG). The payloads were once built with jq --arg, and the
+# checker copy of the standard reached 130,429 bytes at 2.0.9: 643 bytes from
+# the point where every API backend failed with 'Failed to build JSON payload'.
+# A big script and a big standard are made here, so the guard does not depend
+# on how large the real standard happens to be.
+begin_test 'prompts over 128 KiB reach every API backend'
+declare -r BIG_TARGET="$SANDBOX"/big-target.sh BIG_STANDARD="$SANDBOX"/big-standard.md
+declare -r BIG_MARK='# big-prompt end marker'
+{
+  printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'shopt -s inherit_errexit'
+  for ((i = 0; i < 2400; i += 1)); do
+    printf '# padding line %04d to push the script past one argument string\n' "$i"
+  done
+  printf '%s\n' "$BIG_MARK" '#fin'
+} > "$BIG_TARGET"
+{
+  cat -- "$STANDARD"
+  for ((i = 0; i < 2000; i += 1)); do
+    printf 'padding line %04d to push the standard past one argument string\n' "$i"
+  done
+  printf '%s\n' "$BIG_MARK"
+} > "$BIG_STANDARD"
+assert_gt "$(wc -c < "$BIG_TARGET")" 131072 'big script exceeds 128 KiB' ||:
+assert_gt "$(wc -c < "$BIG_STANDARD")" 262144 'big standard exceeds 256 KiB' ||:
+#shellcheck disable=SC2329  # the override is called by cmd_check, inside the check subshell
+big_standard() { _find_bcs_md() { echo "$BIG_STANDARD"; }; }
+
+# assert_big LABEL MODEL BODY USER_JQ SYSTEM_JQ
+assert_big() {
+  local -- label=$1 model=$2 body=$3 user_jq=$4 system_jq=$5
+  reset_cache; CHECK_TARGET=$BIG_TARGET run_check "$body" -m "$model"
+  assert_equal 0 "$RC" "$label: big script -> exit 0" ||:
+  assert_contains "$(jq -r -- "$user_jq" "$PAYLOAD_FILE" 2>/dev/null ||:)" "$BIG_MARK" \
+    "$label: big script reaches the request whole" ||:
+  reset_cache; PRE_HOOK=big_standard run_check "$body" -m "$model"
+  assert_equal 0 "$RC" "$label: big standard -> exit 0" ||:
+  assert_contains "$(jq -r -- "$system_jq" "$PAYLOAD_FILE" 2>/dev/null ||:)" "$BIG_MARK" \
+    "$label: big standard reaches the request whole" ||:
+}
+assert_big openai gpt-5 "$OPENAI_OK" '.messages[1].content' '.messages[0].content'
+assert_big google gemini-2.5-flash "$GOOGLE_OK" '.contents[0].parts[0].text' \
+  '.systemInstruction.parts[0].text'
+assert_big anthropic claude-sonnet-4-6 "$ANTHROPIC_OK" '.messages[0].content' '.system[0].text'
+assert_big ollama qwen3.5:9b "$OLLAMA_OK" '.messages[1].content' '.messages[0].content'
+
 print_summary 'checker-prompt'
 #fin

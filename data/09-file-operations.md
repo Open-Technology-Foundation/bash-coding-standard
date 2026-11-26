@@ -60,8 +60,11 @@ done < <(grep -- 'pattern' "$file")
 # correct — populate arrays
 readarray -t lines < <(find . -name '*.txt')
 
-# correct — compare outputs without temp files
-diff <(sort -- "$file1") <(sort -- "$file2")
+# correct — compare outputs without temp files; capture first, because diff cannot
+# see a failure inside <( ): an unreadable file would compare as empty (BCS0604)
+sorted1=$(sort -- "$file1") || die 1 "Cannot sort ${file1@Q}"
+sorted2=$(sort -- "$file2") || die 1 "Cannot sort ${file2@Q}"
+diff -- <(printf '%s\n' "$sorted1") <(printf '%s\n' "$sorted2")
 
 # correct — null-delimited for special filenames
 while IFS= read -r -d '' file; do

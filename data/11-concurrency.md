@@ -26,16 +26,17 @@ pids+=($!)
 # correct — check if process is running
 kill -0 "$pid" 2>/dev/null           # signal 0 = existence check
 
-# correct — cleanup in trap
+# correct — cleanup in trap (EXIT runs on INT and TERM too: BCS0603)
 cleanup() {
   local -i exitcode=${1:-$?}
-  trap - SIGINT SIGTERM EXIT
+  local -- pid
+  trap - EXIT
   for pid in "${pids[@]}"; do
-    kill "$pid" 2>/dev/null ||:
+    kill "$pid" 2>/dev/null ||:      # a job that already exited has nothing to kill
   done
   exit "$exitcode"
 }
-trap 'cleanup $?' SIGINT SIGTERM EXIT
+trap 'cleanup $?' EXIT
 
 # wrong
 command &                            # untracked background job
@@ -63,23 +64,23 @@ declare -- temp_dir=''
 trap '[[ -z $temp_dir ]] || rm -rf -- "$temp_dir"' EXIT
 temp_dir=$(mktemp -d) || die 1 'Failed to create temp dir'
 declare -a pids=()
-declare -i errors=0
+declare -i i errors=0
 
-for server in "${servers[@]}"; do
-  check_server "$server" &> "$temp_dir"/"$server".out &
-  pids+=($!)
+# output files are named by index: a server name may contain '/' or repeat
+for i in "${!servers[@]}"; do
+  check_server "${servers[i]}" &> "$temp_dir"/"$i".out &
+  pids[i]=$!
 done
 
 # Wait and display in order; accumulate failures (BCS1103)
-for server in "${servers[@]}"; do
-  wait "${pids[0]}" || errors+=1
-  pids=("${pids[@]:1}")
-  cat -- "$temp_dir"/"$server".out
+for i in "${!servers[@]}"; do
+  wait "${pids[i]}" || errors+=1
+  cat -- "$temp_dir"/"$i".out
 done
 ((errors == 0)) || die 1 "$errors job(s) failed"
 ```
 
-Implement concurrency limits by checking `${#pids[@]}` against `max_jobs` and using `wait -n` to wait for slots.
+Implement concurrency limits by checking the number of running jobs against `max_jobs` and using `wait -n` to wait for a slot; `wait -n -p` (Bash 5.1+) names the job that finished, so it can be removed from the list (BCS1103).
 
 Never modify variables in background subshells expecting parent visibility — use temp files for results.
 
@@ -97,13 +98,25 @@ for pid in "${pids[@]}"; do
 done
 ((errors == 0)) || die 1 "$errors job(s) failed"
 
-# correct — process-as-completed (Bash 4.3+ wait -n)
+# correct — process-as-completed (Bash 5.1+): -p names the job that finished,
+# and the explicit pid list keeps wait -n from answering for any other child
 declare -i errors=0
+declare -A running=()
+declare -- pid done_pid
+for pid in "${pids[@]}"; do running[$pid]=1; done
+while ((${#running[@]})); do
+  wait -n -p done_pid "${!running[@]}" || errors+=1
+  unset 'running[$done_pid]'
+done
+((errors == 0)) || die 1 "$errors job(s) failed"
+
+# wrong — a bare wait -n also returns for a background job the list does not hold,
+# and the loop drops pids[0], not the job that finished: it can end with errors=0
+# while a tracked job that will fail is still running
 while ((${#pids[@]})); do
   wait -n || errors+=1
   pids=("${pids[@]:1}")
 done
-((errors == 0)) || die 1 "$errors job(s) failed"
 
 # wrong — exit code discarded; failures silent
 wait "$pid" ||:
@@ -130,6 +143,11 @@ Wrap network and remote operations (`ssh`, `curl`, `wget`, `nc`) with `timeout` 
 # correct
 timeout 300 ssh -o ConnectTimeout=10 "$server" 'command'
 timeout --signal=TERM --kill-after=10 60 long_command
+
+# correct — an interactive command, or one a terminal Ctrl-C must reach: without
+# --foreground, timeout moves it into its own process group, where it cannot read
+# the terminal and never sees Ctrl-C (children of the command are then not timed out)
+timeout --foreground 300 ssh "$server"
 
 # correct — capture the exit code first; a bare command under set -e aborts
 # before any `case $?` could run, so guard with `|| rc=$?`
@@ -170,12 +188,14 @@ while ((attempt <= max_attempts)); do
     break
   fi
 
-  delay=$((2 ** attempt))
-  ((delay > max_delay)) && delay=$max_delay ||:
-
-  # Add jitter to prevent thundering herd
-  jitter=$((RANDOM % delay))
-  sleep $((delay + jitter))
+  # no sleep after the last attempt: nothing follows it
+  if ((attempt < max_attempts)); then
+    delay=$((2 ** attempt))
+    ((delay > max_delay)) && delay=$max_delay ||:
+    # Add jitter to prevent thundering herd
+    jitter=$((RANDOM % delay))
+    sleep $((delay + jitter))
+  fi
 
   attempt+=1
 done

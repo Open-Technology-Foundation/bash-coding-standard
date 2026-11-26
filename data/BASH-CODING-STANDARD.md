@@ -51,7 +51,7 @@ Every BCS-compliant script follows a 13-step structure. Scripts must be self-con
 ```bash
 # correct
 #!/usr/bin/bash
-#shellcheck disable=SC???? # (optional)
+#shellcheck disable=SC????  # (optional) why the warning does not apply
 # Brief description (recommended)
 set -euo pipefail
 shopt -s inherit_errexit
@@ -139,6 +139,7 @@ local -a search_paths=(
   /usr/local/share/myapp/data
   /usr/share/myapp/data
 )
+local -- dir
 for dir in "${search_paths[@]}"; do
   [[ -d $dir ]] && { DATA_DIR="$dir"; break; }
 done
@@ -186,7 +187,7 @@ Always check BOTH stdout AND stderr: `[[ -t 1 && -t 2 ]]`.
 
 ## BCS0106 File Extensions and Dual-Purpose Scripts
 
-**Tier:** core
+**Tier:** recommended
 
 Executables: `.sh` extension or no extension. Globally available executables via PATH must have no extension. Libraries must have `.sh` or `.bash` extension and should not be executable.
 
@@ -323,11 +324,11 @@ declare -- TEMP_DIR
 #...
 cleanup() {
   local -i exitcode=${1:-$?}
-  trap - SIGINT SIGTERM EXIT
+  trap - EXIT
   [[ -z ${TEMP_DIR:-} ]] || rm -rf -- "$TEMP_DIR"
   exit "$exitcode"
 }
-trap 'cleanup $?' SIGINT SIGTERM EXIT
+trap 'cleanup $?' EXIT
 #...
 TEMP_DIR=$(mktemp -d) || die 1 'Failed to create temp dir'
 ```
@@ -434,6 +435,8 @@ one variable.
 
 The `--` separator for string variable types is **purely semantic** -- it signals a conscious variable type choice, completing the pattern alongside `-i`, `-a`, and `-A`.
 
+An integer declaration evaluates its value as an arithmetic expression, so `declare -i n=$value` runs any command substitution hidden in an array subscript inside `$value`. A value from outside the script must be validated before it reaches `-i`; BCS1005 owns that finding.
+
 ## BCS0202 Variable Scoping
 
 **Tier:** core
@@ -489,7 +492,7 @@ readonly MAX_RETRIES=3                # UPPER_CASE for constants/globals
 declare -i VERBOSE=1                  # UPPER_CASE for global state
 
 process_log_file() {                  # lower_case for functions
-  local -- file_count=0               # lower_case for locals
+  local -i file_count=0               # lower_case for locals
 }
 
 _validate_input() { :; }              # underscore prefix for private functions
@@ -682,7 +685,7 @@ run_action() {
 eval "$1=\$2"
 ```
 
-Name the nameref distinctly from any caller variable; a nameref that resolves to its own name is a fatal circular reference. Namerefs require Bash 4.3+ (BCS targets 5.2).
+Name the nameref distinctly from any caller variable. A nameref that resolves to its own name is not fatal, which makes it worse: Bash prints a `circular name reference` warning and carries on, and the assignment lands on the wrong variable (a caller's local of that name is left unchanged). A target name taken from outside the script must be validated first, because an array subscript inside the name is evaluated; BCS1004 owns that finding. Namerefs require Bash 4.3+ (BCS targets 5.2).
 
 ---
 
@@ -800,7 +803,7 @@ cat <<GREETING
 Hello $USER, your home is $HOME
 GREETING
 
-# correct — indented (strips leading tabs, not spaces)
+# correct — indented (strips leading tabs, not spaces; the one place BCS1201 allows tabs)
 if true; then
 	cat <<-CONTENT
 	indented content
@@ -1117,6 +1120,8 @@ Source libraries with existence check:
 source -- "$lib_path" || die 1 "Failed to source ${lib_path@Q}"
 ```
 
+Sourced as the left side of `||`, the library body runs with `set -e` suspended (BCS0601). That costs nothing when the library only defines functions, as above: the functions run later, under the caller's `set -e`. A syntax error still stops the source either way.
+
 ## BCS0408 Dependency Management
 
 **Tier:** recommended
@@ -1177,14 +1182,14 @@ bash_at_least() {
   (( BASH_VERSINFO[2] >= patch ))
 }
 
+# require_bash runs before the metadata, colours and messaging helpers exist, and on
+# the old Bash it is meant to reject: it must be self-contained, with no die() and no
+# syntax newer than Bash 3 (no ${var@Q})
 require_bash() {
   bash_at_least "$@" && return 0
-  local -- want="${1:-0}.${2:-0}.${3:-0}"
-  local -- have="${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}.${BASH_VERSINFO[2]}"
-  die 2 "requires Bash >= ${want@Q} (have ${have@Q})"
-  # OR:
-  # printf '%s: requires Bash >= %s (have %s)\n' "${FUNCNAME[0]}" "$want" "$have" >&2
-  # exit 2
+  >&2 printf '%s: requires Bash >= %s (have %s)\n' "${0##*/}" \
+    "${1:-0}.${2:-0}.${3:-0}" "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}.${BASH_VERSINFO[2]}"
+  exit 2
 }
 ```
 
@@ -1197,15 +1202,16 @@ require_bash() {
 [[ $BASH_VERSION > "5.2" ]]   # "5.10" < "5.2" under string compare
 ```
 
-A finding under this rule requires a version check to exist in the script. Violations: a compound `&&` comparison of `BASH_VERSINFO` components; a string comparison of `BASH_VERSION`; a guard placed after `shopt -s inherit_errexit` or other version-dependent code. Not a violation: having no guard.
+A finding under this rule requires a version check to exist in the script. Violations: a compound `&&` comparison of `BASH_VERSINFO` components; a string comparison of `BASH_VERSION`; a guard placed after `shopt -s inherit_errexit` or other version-dependent code; a guard that depends on anything defined after it (`die()`, colour variables, `SCRIPT_NAME`) or on syntax newer than the Bash it rejects (`${var@Q}`), so that it fails before its message prints. Not a violation: having no guard.
 
 `BASH_VERSINFO` indices: `[0]`=major, `[1]`=minor, `[2]`=patch, `[3]`=build, `[4]`=release status, `[5]`=machine type. Always compare integers per element; never compare `BASH_VERSION` as a string.
 
-When a script has a guard, call `require_bash` at script start, after `set -euo pipefail` (safe on any Bash) but before `shopt -s inherit_errexit` and any other version-dependent code:
+When a script has a guard, define `bash_at_least` and `require_bash` and call `require_bash` at script start, after `set -euo pipefail` (safe on any Bash) but before `shopt -s inherit_errexit` and any other version-dependent code:
 
 ```bash
 #!/usr/bin/bash
 set -euo pipefail
+# bash_at_least() and require_bash() as above, defined here
 require_bash 5 2
 shopt -s inherit_errexit
 ```
@@ -1317,7 +1323,8 @@ done < <(some_command)
 **Pattern 3 -- Temp file** (large output, binary data, or output consumed by multiple later passes):
 
 ```bash
-# global so the single-quoted trap (BCS0603) can expand it at EXIT time
+# global so the single-quoted trap (BCS0603) can expand it at EXIT time; a script that
+# already has an EXIT trap adds this removal to its cleanup() instead (one trap per signal)
 declare -g TEMP_FILE=''
 trap '[[ -z $TEMP_FILE ]] || rm -f -- "$TEMP_FILE"' EXIT
 TEMP_FILE=$(mktemp) || die 1 'mktemp failed'
@@ -1330,7 +1337,7 @@ second_pass < "$TEMP_FILE"
 
 ```bash
 exec 3< <(long_running_stream)
-while read -r -u 3 line; do
+while IFS= read -r -u 3 line; do
   process "$line"
 done
 exec 3<&-
@@ -1448,10 +1455,12 @@ done
 
 # wrong
 for f in $(ls *.txt); do             # never parse ls
-for ((i=0; i<10; i++)); do           # use i+=1 — increment policy: see BCS0505
-while (($# > 0)); do                 # use (($#)) instead
 while read line; do                  # IFS= read -r: -r keeps backslashes, IFS= keeps blanks
 for f in *.log; do process "$f"; done   # without nullglob, processes the literal '*.log'
+
+# style preference — not errors under this rule (increment policy: BCS0505)
+for ((i=0; i<10; i++)); do           # prefer i+=1
+while (($# > 0)); do                 # prefer (($#))
 ```
 
 Read lines with `IFS= read -r`: without `-r` backslashes are mangled, without `IFS=` leading and trailing whitespace is stripped.
@@ -1561,7 +1570,7 @@ declare -i count=0
 count+=1                             # increment
 
 # correct — arithmetic conditional
-((count > 10)) && warn 'High count'  # no $ needed inside (())
+((count > 10)) && warn 'High count' ||:  # no $ needed inside (()); ||: per BCS0606
 
 # correct — assignment via arithmetic expansion never affects exit status
 result=$((x + y))
@@ -1586,10 +1595,15 @@ Bash only supports integer arithmetic. Use `bc -l` or `awk` for floating-point.
 result=$(echo 'scale=2; 10 / 3' | bc -l)
 result=$(awk -v a="$a" -v b="$b" 'BEGIN {printf "%.2f", a * b}')
 
-# correct — float comparison
-if (($(echo "$a > $b" | bc -l))); then
+# correct — float comparison: validate both operands, then let awk's exit status answer
+[[ $a =~ ^-?[0-9]+([.][0-9]+)?$ && $b =~ ^-?[0-9]+([.][0-9]+)?$ ]] || die 22 'Not a decimal number'
+if awk -v a="$a" -v b="$b" 'BEGIN { exit !(a > b) }'; then
   echo 'a is greater'
 fi
+
+# wrong — bc evaluates its input as code, and (( )) evaluates bc's output again: a crafted
+# value runs commands; a malformed one makes bc print nothing, which (( )) reads as false
+if (($(echo "$a > $b" | bc -l))); then echo 'a is greater'; fi
 
 # wrong
 [[ "$a" > "$b" ]]                    # string comparison, not numeric
@@ -1644,6 +1658,8 @@ Error handling covers strict mode, exit codes, traps, return value checking, and
 Scripts run under `set -euo pipefail` (BCS0101). Handle expected failures explicitly — `||:`, an `if` guard, or `|| die` — never by disabling strict mode with `set +e`.
 
 `set -euo pipefail` provides three protections: `-e` exits on command failure, `-u` exits on undefined variables, `-o pipefail` fails pipeline if any command fails.
+
+`-e` has one blind spot to design around: a function called as the condition of `if`, `while`, `&&` or `||` runs with `-e` suspended for its whole call tree, with or without `inherit_errexit`. Inside `if fn; then` or `fn || die`, a failing command in `fn` does not stop it, and `fn` returns the status of its last command. A function meant to be called that way checks its own critical steps (BCS0604).
 
 ```bash
 # correct — allow expected failures
@@ -1743,11 +1759,11 @@ declare -- TEMP_FILE
 #...
 cleanup() {
   local -i exitcode=${1:-$?}
-  trap - SIGINT SIGTERM EXIT         # prevent recursion
+  trap - EXIT                        # prevent recursion
   [[ -z ${TEMP_FILE:-} ]] || rm -f -- "$TEMP_FILE"
   exit "$exitcode"
 }
-trap 'cleanup $?' SIGINT SIGTERM EXIT
+trap 'cleanup $?' EXIT
 #...
 TEMP_FILE=$(mktemp) || die 1 'Failed to create temp file'
 readonly TEMP_FILE
@@ -1760,7 +1776,7 @@ Use single quotes for trap commands to delay variable expansion. Use `||:` for c
 trap 'rm -f -- "$temp_file"' EXIT
 
 # correct — kill background processes in cleanup
-((bg_pid)) && kill "$bg_pid" 2>/dev/null ||:
+((bg_pid)) && kill "$bg_pid" 2>/dev/null ||:   # the job may have exited already
 
 # wrong — double quotes expand immediately
 trap "rm -f $temp_file" EXIT
@@ -1770,6 +1786,18 @@ trap 'rm -f -- "$temp_file"; exit 0' EXIT
 ```
 
 The handler must propagate the script's exit status: pass `$?` in (`trap 'cleanup $?' ...`) and finish with `exit "$exitcode"`, as in the example above. A trap that ends in `exit 0`, or any fixed status, hides the failure from the caller.
+
+**Signals.** Trap `EXIT` alone for cleanup. When a fatal signal (INT, TERM, HUP) kills the script, Bash still runs the EXIT trap and then dies by that signal, so the caller sees 130, 143 or 129. Adding `SIGINT SIGTERM` to the `cleanup $?` trap turns that death into an ordinary exit with whatever `$?` held when the signal arrived, which is **0** while the script is running builtins: an interrupted script reports success. A script that must react to INT or TERM itself maps each to its conventional status and leaves cleanup to EXIT:
+
+```bash
+# correct — EXIT does the cleanup; INT and TERM only set a non-zero status
+trap 'cleanup $?' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# wrong — a signal during builtins leaves $? at 0, so the interrupted script exits 0
+trap 'cleanup $?' SIGINT SIGTERM EXIT
+```
 
 Never combine multiple traps for the same signal (replaces previous). Use a single trap with a cleanup function.
 
@@ -1796,9 +1824,9 @@ if ! sort -- "$file" | uniq > "$output"; then
   die 1 'Pipeline failed'
 fi
 
-# correct — check $? immediately
-cmd1
-local -i result=$?
+# correct — capture the status; a bare cmd1 would let set -e abort before $? is read
+local -i result=0
+cmd1 || result=$?
 
 # wrong — a failure inside <( ) is invisible: diff silently compares against empty input
 diff -- <(failing_command) "$file"
@@ -1824,6 +1852,7 @@ A command run only inside a process substitution (`<(cmd)`) has no exit status a
 # correct — snapshot, then inspect each stage
 if ! sort -- "$file" | uniq | wc -l > "$output"; then
   local -a ps=("${PIPESTATUS[@]}")
+  local -i i
   for i in "${!ps[@]}"; do
     ((ps[i] == 0)) || error "Stage $i failed (exit ${ps[i]})"
   done
@@ -1887,7 +1916,8 @@ Under `set -e`, a false arithmetic condition (e.g., `((DRY_RUN))` when `DRY_RUN=
 ((DEBUG)) && set -x ||:
 ((VERBOSE < 3)) && VERBOSE+=1 ||:
 
-# wrong — missing ||:, script exits when flag is 0
+# wrong — missing ||:, the chain returns 1 when the flag is 0: fatal as a function's last
+# statement, inside $(...), or as the script's last command
 ((DRY_RUN)) && info 'Dry-run mode'
 ```
 
@@ -1903,7 +1933,7 @@ command -v curl >/dev/null || die 18 'curl required'
 
 The `||:` catches failure from **the entire chain**, including the arithmetic condition -- not just the final command. Use `:` over `true` (shorter, built-in, traditional shell idiom).
 
-**Style (preference only):** when `||:` is present, both the `&&...||:` form and the inverted `||` form are correct. Pick whichever reads more naturally -- short guard clauses favour inversion; flag-guarded actions often favour `&&...||:`. **Neither form alone is a violation.** LLM-based checkers MUST NOT report a rule violation for form choice when `||:` is properly present.
+**Style (preference only):** when `||:` is present, both the `&&...||:` form and the inverted `||` form are correct, as is an `if ((FLAG)); then ...; fi` block, which needs no `||:` and cannot hide a failure of the action. Pick whichever reads more naturally -- short guard clauses favour inversion; flag-guarded actions often favour `&&...||:`. **Neither form alone is a violation.** LLM-based checkers MUST NOT report a rule violation for form choice when `||:` is properly present.
 
 **Never:** never use `||:` for critical operations that must succeed -- it masks real failures.
 
@@ -2077,17 +2107,17 @@ info 'Validating environment...'
 warn 'Deprecated option used'
 error 'Connection failed'
 
-# correct — echo for data and help
-echo "$result"                       # data output
+# correct — printf or echo for data and help
+printf '%s\n' "$result"              # data output; echo would swallow a value of -n or -e
 echo "$SCRIPT_NAME $VERSION"         # version output
 # help text
 cat <<HELP
 ...
 HELP
 
-# correct — functions returning data use echo
+# correct — functions returning data write it to stdout
 get_value() {
-  echo "$result"                     # stdout for callers to capture
+  printf '%s\n' "$result"            # stdout for callers to capture
 }
 
 # wrong — mixing streams
@@ -2158,10 +2188,11 @@ else
   echo '50% complete'
 fi
 
-# correct — hide cursor during TUI, restore on exit
+# correct — hide cursor during TUI, restore on exit; the trap goes first (BCS0110),
+# and a script with a cleanup() puts the restore there instead (one trap per signal)
 if [[ -t 1 ]]; then
-  printf '\033[?25l'                   # hide cursor
   trap 'printf "\033[?25h"' EXIT       # restore on exit
+  printf '\033[?25l'                   # hide cursor
 fi
 
 # wrong — cursor escape leaks into pipes and logs
@@ -2179,11 +2210,12 @@ Get terminal dimensions dynamically.
 ```bash
 # correct
 trap 'get_terminal_size' WINCH
-cols=$(tput cols 2>/dev/null || echo 80)
+cols=$(tput cols 2>/dev/null || echo 80)   # no terminal (cron, pipe): tput complains; use 80
 
 # correct — check Unicode support (guarded; bare [[ ]] would trip errexit)
 declare -i UNICODE=0
-[[ ${LC_ALL:-${LC_CTYPE:-${LANG:-}}} == *UTF-8* ]] && UNICODE=1 ||:
+declare -- locale=${LC_ALL:-${LC_CTYPE:-${LANG:-}}}
+[[ ${locale,,} =~ utf-?8 ]] && UNICODE=1 ||:   # en_US.UTF-8, C.utf8, en_US.utf8 alike
 ```
 
 Never hardcode terminal width. Provide graceful fallbacks for limited terminals.
@@ -2206,7 +2238,7 @@ yn() {
 yn 'Deploy to production?' || die 0 'Cancelled'
 ```
 
-A confirmation must be suppressible, so the script can run unattended: either `yn()` returns success when `PROMPT` is 0 (declared in BCS0701, cleared by `-N`/`--no-prompt`, BCS0806), as above, or every call is guarded by `((PROMPT))`. A guard in either place satisfies this rule; a confirmation that cannot be switched off is a violation.
+A confirmation must be suppressible, so the script can run unattended: either `yn()` returns success when `PROMPT` is 0 (declared in BCS0701, cleared by `-f`/`--force`, BCS0806), as above, or every call is guarded by `((PROMPT))`. A guard in either place satisfies this rule; a confirmation that cannot be switched off is a violation.
 
 ## BCS0710 Standard Icons
 
@@ -2244,6 +2276,8 @@ somecommand >>logfile 2>&1
 ```
 
 Use `2>/dev/null` or `2>file` when suppressing only stderr. The `&>` operator is for combined (stdout + stderr) redirection only.
+
+`&>` also cannot be written in the wrong order. Redirections apply left to right, so `cmd 2>&1 >file` points stderr at the original stdout before stdout moves to `file`: stderr never reaches the file.
 
 ---
 
@@ -2290,6 +2324,10 @@ while (($#)); do case $1 in
   *)            FILES+=("$1") ;;
 esac; done
 
+# wrong — arms for attached option-arguments; the argument is always the next word
+--output=*)   OUTPUT=${1#*=} ;;
+-o?*)         OUTPUT=${1:2} ;;
+
 # wrong — several options handled by an if/elif chain instead of the loop
 if [[ $1 == -v || $1 == --verbose ]]; then
   VERBOSE=1
@@ -2302,6 +2340,7 @@ Key rules:
 - Use `(($#))` as the loop condition, not `[[ $# -gt 0 ]]` (house style; functionally equivalent)
 - The mandatory `shift` at loop end is critical — omitting it causes infinite loops
 - For options with arguments: `noarg "$@"; shift; variable=$1`
+- An option's argument is always a separate word, for short and long options alike (`-o FILE`, `--output FILE`). Attached forms (`-oFILE`, `--output=FILE`) are not part of a BCS interface: the loop has no arm for them, and help text documents only the separated form
 - For boolean flags: just set, no extra shift needed
 - For exit options (`--help`, `--version`): use `exit 0`, no shift needed
 - Use `continue` after option disaggregation to re-process expanded options
@@ -2402,7 +2441,18 @@ Place bundling case before `-*)` invalid option handler and after all explicit o
 
 Include arg-taking options in the character class. They work correctly when last in the bundle — the disaggregation peels them off as a separate `-X` flag, and `shift` in their case handler picks up the argument normally. Example: `-vno output.txt` disaggregates to `-v -n -o`, then `-o` consumes `output.txt` via `shift`. The user must place arg-taking options last; `-von file` would incorrectly disaggregate to `-v -o -n`.
 
-▲ Attached option-arguments (`-oFILE`) are NOT supported by this pattern — the disaggregator prepends `-` to the remainder, so `-ooutput.txt` becomes `-o -output.txt` and the handler silently captures `-output.txt` (`noarg` cannot catch it). Option arguments must be separate words: `-o FILE`.
+▲ Attached option-arguments (`-oFILE`) are NOT supported by this pattern — the disaggregator prepends `-` to the remainder, so `-ooutput.txt` becomes `-o -output.txt` and the handler silently captures `-output.txt` (`noarg` cannot catch it). Option arguments are always separate words, for short and long options alike: `-o FILE`, `--output FILE` (BCS0801).
+
+```bash
+# correct — the argument is the next word, bundled or not
+myscript -vn -o out.txt input.txt
+myscript -vno out.txt input.txt
+myscript --verbose --output out.txt input.txt
+
+# wrong — attached arguments are not part of a BCS interface
+myscript -oout.txt input.txt
+myscript --output=out.txt input.txt
+```
 
 ## BCS0806 Standard Options
 
@@ -2432,7 +2482,7 @@ Use consistent option letters and variable names across all BCS-compliant script
 |-------|------|----------|---------|---------|
 | `-n` | `--dry-run` | `DRY_RUN` | `0` or `1` | Preview without changes |
 | `-N` | `--not-dry-run` | `DRY_RUN` | `0` | Execute changes (cancels dry-run) |
-| `-f` | `--force` | `FORCE` | `0` | Skip confirmation prompts |
+| `-f` | `--force` | `PROMPT` | `1` | Skip confirmation prompts: sets `PROMPT=0` (BCS0701, BCS0709) |
 | `-D` | `--debug` | `DEBUG` | `0` | Enable debug output |
 | `-p` | `--port` | `PORT` | varies | Network port |
 | `-P` | `--prefix` | `PREFIX` | varies | Installation prefix |
@@ -2441,18 +2491,18 @@ Key rules:
 - **Avoid reassigning** a standard letter to a different purpose — `-v` is always verbose, never version
 - **Toggle pairs:** `-n`/`-N` and `-v`/`-q` are complementary toggles sharing a variable; a script that offers both halves spells them this way, but offering one half alone is not a finding
 - **DRY_RUN=1 default** for destructive scripts — require `-N` to execute; use `DRY_RUN=0` for non-destructive scripts
-- **Use `declare -i`** for all flag variables: `declare -i VERBOSE=1 DRY_RUN=0 DEBUG=0 FORCE=0`
+- **Use `declare -i`** for all flag variables: `declare -i VERBOSE=1 DRY_RUN=0 DEBUG=0 PROMPT=1`
 
 ```bash
 # correct — standard options with consistent letters and variables
-declare -i VERBOSE=1 DRY_RUN=0 DEBUG=0 FORCE=0
+declare -i VERBOSE=1 DRY_RUN=0 DEBUG=0 PROMPT=1
 
 while (($#)); do case $1 in
   -v|--verbose)     VERBOSE=1 ;;
   -q|--quiet)       VERBOSE=0 ;;
   -n|--dry-run)     DRY_RUN=1 ;;
   -N|--not-dry-run) DRY_RUN=0 ;;
-  -f|--force)       FORCE=1 ;;
+  -f|--force)       PROMPT=0 ;;
   -D|--debug)       DEBUG=1 ;;
   -V|--version)     echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
   -h|--help)        show_help; exit 0 ;;
@@ -2535,8 +2585,11 @@ done < <(grep -- 'pattern' "$file")
 # correct — populate arrays
 readarray -t lines < <(find . -name '*.txt')
 
-# correct — compare outputs without temp files
-diff <(sort -- "$file1") <(sort -- "$file2")
+# correct — compare outputs without temp files; capture first, because diff cannot
+# see a failure inside <( ): an unreadable file would compare as empty (BCS0604)
+sorted1=$(sort -- "$file1") || die 1 "Cannot sort ${file1@Q}"
+sorted2=$(sort -- "$file2") || die 1 "Cannot sort ${file2@Q}"
+diff -- <(printf '%s\n' "$sorted1") <(printf '%s\n' "$sorted2")
 
 # correct — null-delimited for special filenames
 while IFS= read -r -d '' file; do
@@ -2756,10 +2809,10 @@ Never use `eval` with untrusted input. Almost every use case has a safer alterna
 local -a cmd=(find -- "$path" -name "$pattern")
 "${cmd[@]}"
 
-# correct — indirect expansion
+# correct — indirect expansion (var_name validated as below)
 echo "${!var_name}"
 
-# correct — printf -v for dynamic assignment
+# correct — printf -v for dynamic assignment (var_name validated as below)
 printf -v "$var_name" '%s' "$value"
 
 # correct — associative arrays for dynamic data
@@ -2778,17 +2831,51 @@ eval "$var_name='$value'"
 eval "${action}_function"
 ```
 
+**A variable name is code.** The alternatives above are not eval-free when the name comes from outside the script. `${!name}`, `printf -v "$name"`, `local -n ref=$name` and `unset "$name"` all accept an array subscript inside the name, and Bash evaluates that subscript as arithmetic: a name of `a[$(cmd)]` runs `cmd`. A name from outside the script (the command line, which includes the parameters of `main "$@"`; the environment; a file; another program) must match `^[a-zA-Z_][a-zA-Z0-9_]*$` before it reaches any of them; check it once, where it enters. A literal needs no check, and neither does a helper's parameter when every caller passes a name the script wrote. The keys of an associative array are data, not names, so `data["$key"]` is safe with any key.
+
+```bash
+# correct — validate a name from outside the script before indirection
+[[ $var_name =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || die 22 "Invalid variable name ${var_name@Q}"
+printf -v "$var_name" '%s' "$value"
+
+# wrong — main's parameters are the command line: a name of 'x[$(cmd)]' runs cmd
+main() { printf -v "$1" '%s' "$value"; echo "${!2}"; }
+
+# not a finding — a literal the script itself wrote
+local -n result_ref=RESULT
+
+# not a finding — a helper whose every caller passes a name the script wrote
+read_into() { local -n out=$1; IFS= read -r out; }
+read_into ANSWER
+```
+
 ## BCS1005 Input Sanitization
 
 **Tier:** core
 
 Validate and sanitize all user input. Use whitelist over blacklist. Pass `--` before any pathname operand that originates from variables or user input (`rm -- "$f"`, `cp -- "$src" "$dst"`) to prevent option injection via filenames beginning with `-`.
 
+**Integers from outside.** Bash evaluates as arithmetic whatever reaches `declare -i`, `local -i`, an integer variable's assignment, `(( ))`, `$(( ))` or an array index, and an array subscript inside the value runs as a command: `n='a[$(cmd)]'; local -i x=$n` runs `cmd`. A value from outside the script (the command line, which includes the parameters of `main "$@"`; the environment; a config file; another program) must match an integer pattern (`^[0-9]+$`, or `^-?[0-9]+$` where negatives are allowed) before it gets there; check it once, where it enters. A value the script computed itself, a literal, `$#`, `$?` and `$!` need no check, and neither does a helper's parameter when every caller passes such a value.
+
 **Scope of `--`.** Every command that takes a pathname operand, read-only ones and builtins included: `cat`, `head`, `sort`, `grep`, `wc`, `stat`, `diff`, `source` and `cd` parse a leading dash exactly as `rm` does, and "read-only" is no defence — a file named `-o/etc/cron.d/job` turns `sort "$f"` into a write. The `--` is owed when an operand **begins with an expansion** (`"$f"`, `"$dir"/x`, `"${files[@]}"`, `"$(cmd)"/x`). It is **not** owed, and its absence is never a finding, when the operand begins with literal text (`./"$f"`, `/etc/"$name"`: it cannot start with a dash), when the variable is an option's argument (`sort -o "$out"`, `grep -f "$patterns"`), for a redirection (`< "$file"`), inside `[[ ]]`, or for a command that takes no pathname (`echo`, `printf`, `tr`). Place it before the first operand, which is not always the pathname: `grep -- "$pattern" "$file"`, `chmod -- 644 "$f"`, `awk -- 'prog' "$f"` (after the program, `awk` reads `--` as a filename).
 
 ```bash
-# correct — validate integer
+# correct — validate integer before any arithmetic context sees it
 [[ $input =~ ^-?[0-9]+$ ]] || die 22 "Invalid integer: ${input@Q}"
+local -i count=$input
+
+# wrong — the environment value goes straight to an integer declaration
+declare -i RETRIES=${RETRIES:-3}
+
+# wrong — main's parameters are the command line (main "$@")
+main() { local -i retries=${2:-3}; }
+
+# not a finding — the script's own values
+local -i total=$((count * 2)) nargs=$#
+
+# not a finding — a helper whose every caller passes the script's own value
+cleanup() { local -i exitcode=${1:-$?}; trap - EXIT; exit "$exitcode"; }
+trap 'cleanup $?' EXIT
 
 # correct — validate path within allowed directory
 # allowed_dir must be canonical (realpath output) with no trailing slash
@@ -2821,6 +2908,8 @@ sort -o "$output" -- "$input"
 content=$(< "$file")
 ```
 
+`realpath -e` requires the path to exist; for an output path that does not exist yet, `realpath -m` resolves it without that requirement. Ranges such as `a-z` follow the locale's collation, so under `en_US.UTF-8` they also admit accented letters such as `é`. The patterns here stay safe that way (a letter is never a separator, a quote or a leading dash); where only ASCII may pass, test under `LC_ALL=C`.
+
 Validate early, fail securely with clear errors, run with minimum necessary permissions.
 
 ## BCS1006 Temporary File Handling
@@ -2849,8 +2938,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# correct — custom template
-mktemp /tmp/"$SCRIPT_NAME".XXXXXX
+# correct — custom template; --tmpdir honours $TMPDIR (default /tmp)
+temp_file=$(mktemp --tmpdir -- "$SCRIPT_NAME".XXXXXX) || die 1 'Failed to create temp file'
 
 # wrong
 echo data > /tmp/myapp_temp.txt      # predictable path
@@ -2881,9 +2970,12 @@ Scripts that merely run a pipeline of well-known commands (`grep`, `awk`, `curl`
 # correct — explicit scrubbing before exec in a privileged wrapper
 unset LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT \
       PYTHONPATH PERL5LIB RUBYLIB NODE_PATH \
-      BASH_ENV ENV SHELLOPTS
+      BASH_ENV ENV
+export -n SHELLOPTS BASHOPTS         # readonly: cannot be unset, so stop exporting them
 exec /usr/libexec/myapp/helper "$@"
 ```
+
+`SHELLOPTS` and `BASHOPTS` are readonly; `unset` of either fails, which under `set -e` ends the script before the `exec`. `export -n` keeps them out of the child's environment. A denylist is a minimum, never a complete scrub: it misses exported Bash functions (`BASH_FUNC_name%%`) and loader variables added after it was written. Prefer `env -i` where the helper allows it.
 
 **Stronger -- `env -i` for a fully-reset environment** (PATH must be set explicitly):
 
@@ -2942,16 +3034,17 @@ pids+=($!)
 # correct — check if process is running
 kill -0 "$pid" 2>/dev/null           # signal 0 = existence check
 
-# correct — cleanup in trap
+# correct — cleanup in trap (EXIT runs on INT and TERM too: BCS0603)
 cleanup() {
   local -i exitcode=${1:-$?}
-  trap - SIGINT SIGTERM EXIT
+  local -- pid
+  trap - EXIT
   for pid in "${pids[@]}"; do
-    kill "$pid" 2>/dev/null ||:
+    kill "$pid" 2>/dev/null ||:      # a job that already exited has nothing to kill
   done
   exit "$exitcode"
 }
-trap 'cleanup $?' SIGINT SIGTERM EXIT
+trap 'cleanup $?' EXIT
 
 # wrong
 command &                            # untracked background job
@@ -2979,23 +3072,23 @@ declare -- temp_dir=''
 trap '[[ -z $temp_dir ]] || rm -rf -- "$temp_dir"' EXIT
 temp_dir=$(mktemp -d) || die 1 'Failed to create temp dir'
 declare -a pids=()
-declare -i errors=0
+declare -i i errors=0
 
-for server in "${servers[@]}"; do
-  check_server "$server" &> "$temp_dir"/"$server".out &
-  pids+=($!)
+# output files are named by index: a server name may contain '/' or repeat
+for i in "${!servers[@]}"; do
+  check_server "${servers[i]}" &> "$temp_dir"/"$i".out &
+  pids[i]=$!
 done
 
 # Wait and display in order; accumulate failures (BCS1103)
-for server in "${servers[@]}"; do
-  wait "${pids[0]}" || errors+=1
-  pids=("${pids[@]:1}")
-  cat -- "$temp_dir"/"$server".out
+for i in "${!servers[@]}"; do
+  wait "${pids[i]}" || errors+=1
+  cat -- "$temp_dir"/"$i".out
 done
 ((errors == 0)) || die 1 "$errors job(s) failed"
 ```
 
-Implement concurrency limits by checking `${#pids[@]}` against `max_jobs` and using `wait -n` to wait for slots.
+Implement concurrency limits by checking the number of running jobs against `max_jobs` and using `wait -n` to wait for a slot; `wait -n -p` (Bash 5.1+) names the job that finished, so it can be removed from the list (BCS1103).
 
 Never modify variables in background subshells expecting parent visibility — use temp files for results.
 
@@ -3013,13 +3106,25 @@ for pid in "${pids[@]}"; do
 done
 ((errors == 0)) || die 1 "$errors job(s) failed"
 
-# correct — process-as-completed (Bash 4.3+ wait -n)
+# correct — process-as-completed (Bash 5.1+): -p names the job that finished,
+# and the explicit pid list keeps wait -n from answering for any other child
 declare -i errors=0
+declare -A running=()
+declare -- pid done_pid
+for pid in "${pids[@]}"; do running[$pid]=1; done
+while ((${#running[@]})); do
+  wait -n -p done_pid "${!running[@]}" || errors+=1
+  unset 'running[$done_pid]'
+done
+((errors == 0)) || die 1 "$errors job(s) failed"
+
+# wrong — a bare wait -n also returns for a background job the list does not hold,
+# and the loop drops pids[0], not the job that finished: it can end with errors=0
+# while a tracked job that will fail is still running
 while ((${#pids[@]})); do
   wait -n || errors+=1
   pids=("${pids[@]:1}")
 done
-((errors == 0)) || die 1 "$errors job(s) failed"
 
 # wrong — exit code discarded; failures silent
 wait "$pid" ||:
@@ -3046,6 +3151,11 @@ Wrap network and remote operations (`ssh`, `curl`, `wget`, `nc`) with `timeout` 
 # correct
 timeout 300 ssh -o ConnectTimeout=10 "$server" 'command'
 timeout --signal=TERM --kill-after=10 60 long_command
+
+# correct — an interactive command, or one a terminal Ctrl-C must reach: without
+# --foreground, timeout moves it into its own process group, where it cannot read
+# the terminal and never sees Ctrl-C (children of the command are then not timed out)
+timeout --foreground 300 ssh "$server"
 
 # correct — capture the exit code first; a bare command under set -e aborts
 # before any `case $?` could run, so guard with `|| rc=$?`
@@ -3086,12 +3196,14 @@ while ((attempt <= max_attempts)); do
     break
   fi
 
-  delay=$((2 ** attempt))
-  ((delay > max_delay)) && delay=$max_delay ||:
-
-  # Add jitter to prevent thundering herd
-  jitter=$((RANDOM % delay))
-  sleep $((delay + jitter))
+  # no sleep after the last attempt: nothing follows it
+  if ((attempt < max_attempts)); then
+    delay=$((2 ** attempt))
+    ((delay > max_delay)) && delay=$max_delay ||:
+    # Add jitter to prevent thundering herd
+    jitter=$((RANDOM % delay))
+    sleep $((delay + jitter))
+  fi
 
   attempt+=1
 done
@@ -3115,7 +3227,7 @@ Code formatting, comments, development practices, debugging, dry-run patterns, a
 
 **Tier:** style
 
-- 2 spaces for indentation (never tabs)
+- 2 spaces for indentation, never tabs. Two exceptions, where the tab is syntax rather than layout: the body of a `<<-` heredoc, whose leading tabs Bash strips (BCS0304), and a Makefile recipe line, which must begin with a tab (BCS1212)
 - Lines under 120 characters (except URLs/paths)
 - When a line must exceed the limit, break it with `\` continuation
 
@@ -3138,7 +3250,7 @@ declare -r PROFILE_DIR=/etc/profile.d
 
 # correct — documents a non-obvious semantic
 # readarray quirk: single empty element means no results
-((fnd == 1)) && [[ -z ${found_files[0]} ]] && fnd=0
+((fnd == 1)) && [[ -z ${found_files[0]} ]] && fnd=0 ||:
 
 # wrong — paraphrases the statement below
 # Set verbose to 1
@@ -3157,7 +3269,7 @@ LLM-based checkers should flag comments that mechanically paraphrase the next li
 
 - One blank line between functions
 - One blank line between logical sections within functions
-- One blank line after section comments
+- One blank line before section comments, none between the comment and the code it marks
 - Blank lines before and after multi-line blocks
 - Never multiple consecutive blank lines
 - No blank lines between short, related statements
@@ -3171,10 +3283,10 @@ Section comments mark logical divisions within a script. They must be:
 - A single line
 - 2-4 words
 - Prefixed with a single `#` (no box-drawing characters, no ASCII art frames)
-- Followed by a blank line before the first marked statement
+- Placed directly above the first statement it marks, with a blank line before the comment
 
 ```bash
-# correct — single #, 2-4 words, blank line follows
+# correct — single #, 2-4 words, blank line before, none after
 # Default values
 declare -i VERBOSE=1 DEBUG=0
 
@@ -3209,8 +3321,8 @@ ${path##*/}                         # not $(basename "$path")
 ${path%/*}                          # not $(dirname "$path")
 ${var^^}                            # not $(echo "$var" | tr a-z A-Z)
 ${var,,}                            # not $(echo "$var" | tr A-Z a-z)
-[[ condition ]]                     # not [ condition ] or test
-var=$(command)                      # not var=`command`
+[[ condition ]]                     # not [ condition ] or test: cite BCS0501 or BCS0901
+var=$(command)                      # not backticks: cite BCS0302
 {1..10}                             # not $(seq 1 10)
 
 # not this rule — parsing a variable with an external tool: cite BCS0507
@@ -3218,8 +3330,10 @@ minor=$(echo "$tag" | cut -d. -f2)
 ```
 
 Parsing a shell variable with an external tool (`grep -oE`, `cut -d`, `sed -n`,
-`awk '{print $N}'`) is **BCS0507's** finding, not this rule's. This rule covers
-the remaining builtin substitutions listed above.
+`awk '{print $N}'`) is **BCS0507's** finding, not this rule's. The `[[ ]]` and
+`$()` lines above are listed for completeness only: a `[ ]` or `test` is owned by
+BCS0501 (strings, numbers) or BCS0901 (files), and a backtick by BCS0302. This rule
+covers the remaining builtin substitutions listed above.
 
 ## BCS1206 Static Analysis Directives
 
@@ -3256,10 +3370,11 @@ Severity of a finding comes from the rule's tier alone; see the Compliance Check
 
 **Tier:** recommended
 
-Gate debug output on an integer `DEBUG` variable (`declare -i DEBUG=${DEBUG:-0}`), send it to stderr, and never ship an unconditional `set -x`.
+Gate debug output on an integer `DEBUG` variable (`declare -i DEBUG=${DEBUG:-0}`, validated first because it comes from the environment: BCS1005), send it to stderr, and never ship an unconditional `set -x`. A trace prints every command with its values expanded, secrets included: keep `set -x` away from code that handles credentials.
 
 ```bash
-# correct
+# correct — among the globals, before die() exists, so the check exits by hand
+[[ ${DEBUG:-0} =~ ^[0-9]+$ ]] || { >&2 echo "${0##*/}: DEBUG must be a non-negative integer"; exit 22; }
 declare -i DEBUG=${DEBUG:-0}
 ((DEBUG)) && set -x ||:
 
@@ -3267,7 +3382,7 @@ declare -i DEBUG=${DEBUG:-0}
 export PS4='+ ${BASH_SOURCE##*/}:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}():} '
 
 # debug function
-debug() { ((DEBUG)) || return 0; >&2 _msg "$@"; }
+debug() { ((DEBUG)) || return 0; _msg "$RED⦿$NC" "$@"; }   # _msg writes to stderr (BCS0703)
 
 # runtime activation
 DEBUG=1 ./script.sh
@@ -3299,27 +3414,32 @@ Dry-run maintains identical control flow (same function calls, same logic paths)
 
 ```bash
 # correct — dependency injection
-declare -f FIND_CMD >/dev/null || FIND_CMD() { find "$@"; }
-# override in tests: FIND_CMD() { echo 'mocked_file.txt'; }
+declare -f find_cmd >/dev/null || find_cmd() { find "$@"; }
+# override in tests: find_cmd() { echo 'mocked_file.txt'; }
 
-# correct — test mode flag
+# correct — test mode flag, validated before declare -i evaluates it (BCS1005)
+[[ ${TEST_MODE:-0} =~ ^[0-9]+$ ]] || die 22 "Invalid TEST_MODE ${TEST_MODE@Q}"
 declare -i TEST_MODE=${TEST_MODE:-0}
 
-# correct — assert function
+# correct — assert function; it records the failure, because a test called from
+# `if` runs with set -e suspended (BCS0601) and carries on past a failed assert
+declare -i TEST_FAILED=0
 assert() {
   local -- expected=$1 actual=$2 msg=${3:-assertion}
   [[ $expected == "$actual" ]] || {
     error "FAIL: $msg: expected ${expected@Q}, got ${actual@Q}"
+    TEST_FAILED=1
     return 1
   }
 }
 
-# correct — test runner
+# correct — test runner: a test passes only if it returns 0 and no assert failed
 run_tests() {
   local -i passed=0 failed=0
   local -- fn
   while read -r _ _ fn; do
-    if "$fn"; then
+    TEST_FAILED=0
+    if "$fn" && ((TEST_FAILED == 0)); then
       passed+=1
     else
       failed+=1
@@ -3367,13 +3487,13 @@ Common helper functions:
 noarg() { (($# > 1)) || die 22 "Option ${1@Q} requires an argument"; }
 
 # Trim whitespace
-trim() { local -- v="$*"; v=${v#"${v%%[![:blank:]]*}"}; echo -n "${v%"${v##*[![:blank:]]}"}" ; }
+trim() { local -- v="$*"; v=${v#"${v%%[![:blank:]]*}"}; printf '%s' "${v%"${v##*[![:blank:]]}"}"; }
 
-# Debug variable display
-decp() { declare -p "$@" 2>/dev/null | sed 's/^declare -[a-zA-Z-]* //'; }
+# Debug variable display (an unknown name reports itself and returns 1)
+decp() { declare -p "$@" | sed 's/^declare -[a-zA-Z-]* //'; }
 
-# Pluralization
-s() { (( ${1:-1} == 1 )) || echo -n 's'; }
+# Pluralization (a string test: an arithmetic one would evaluate its argument)
+s() { [[ ${1:-1} == 1 ]] || printf 's'; }
 ```
 
 ## BCS1212 Makefile Installation
@@ -3400,7 +3520,13 @@ help        Show targets and variables
 PREFIX  ?= /usr/local
 BINDIR  ?= $(PREFIX)/bin
 MANDIR  ?= $(PREFIX)/share/man/man1
+# /etc/bash_completion.d only for a system prefix; a custom PREFIX keeps its
+# completions under itself instead of writing to the host's /etc
+ifeq ($(filter /usr /usr/local,$(PREFIX)),)
+COMPDIR ?= $(PREFIX)/share/bash-completion/completions
+else
 COMPDIR ?= /etc/bash_completion.d
+endif
 DESTDIR ?=
 ```
 
@@ -3452,7 +3578,11 @@ install -m 755 myscript $(DESTDIR)$(BINDIR)/myscript
 PREFIX  ?= /usr/local
 BINDIR  ?= $(PREFIX)/bin
 MANDIR  ?= $(PREFIX)/share/man/man1
+ifeq ($(filter /usr /usr/local,$(PREFIX)),)
+COMPDIR ?= $(PREFIX)/share/bash-completion/completions
+else
 COMPDIR ?= /etc/bash_completion.d
+endif
 DESTDIR ?=
 
 # Directory of this Makefile (trailing slash). Anchors source paths so
@@ -3469,7 +3599,8 @@ install:
 	@# Manpages (if present)
 	install -d $(DESTDIR)$(MANDIR)
 	install -m 644 $(srcdir)myscript.1 $(DESTDIR)$(MANDIR)/myscript.1
-	@# Bash completion (if present, skip if dir missing)
+	@# Bash completion: a COMPDIR under PREFIX is ours to create; a system one is used only if present
+	@case "$(COMPDIR)" in "$(PREFIX)"/*) install -d $(DESTDIR)$(COMPDIR) ;; esac
 	@if [ -d $(DESTDIR)$(COMPDIR) ]; then \
 	  install -m 644 $(srcdir).bash_completion $(DESTDIR)$(COMPDIR)/myscript; \
 	fi
@@ -3485,7 +3616,7 @@ check:
 	@echo 'myscript: OK'
 
 test:
-	cd tests && ./run_all_tests.sh
+	cd $(srcdir)tests && ./run_all_tests.sh
 
 help:
 	@echo 'Usage: make [target]'
@@ -3612,6 +3743,15 @@ When `1`, stdout is a single JSON object shaped like `shellcheck --format=json1`
 
 When `1`, `shellcheck --format=json -x` runs over the target script and the JSON report is prepended to the LLM user prompt as static-analysis context. Auto-skipped when `shellcheck` is not on `PATH`.
 
+### `BCS_CACHE`
+
+- **Default:** `1` (enabled)
+- **Values:** `0` or `1`
+- **Override flag:** `--cache`, `--no-cache`
+- **Consumed:** `cmd_check()` initialiser
+
+When `1`, a successful, non-empty result is stored under `$XDG_CACHE_HOME/bcs/`, keyed on every input that can change the answer (version, backend, model, effort, flags, tier filters, policy text, shellcheck report, script and standard), and an identical later check is answered from the cache without an LLM call. `0` disables both the read and the write. Like the other integer flags, a value that is not a non-negative integer is refused with exit 22.
+
 ### `BCS_TIER`
 
 - **Default:** unset (no tier filter)
@@ -3653,7 +3793,7 @@ Extend or override in `bcs.conf`:
 
 ```bash
 MODEL_ALIASES[mymodel]=qwen3.5:14b
-MODEL_ALIASES[sonnet]=claude-sonnet-4-7   # repoint a built-in alias
+MODEL_ALIASES[sonnet]=claude-sonnet-5     # repoint a built-in alias
 ```
 
 Unknown names pass through `_expand_alias()` unchanged, so canonical model IDs need no alias entry. To pin a model across sessions, set `BCS_MODEL` to an alias or canonical ID in `bcs.conf`.
@@ -3718,6 +3858,12 @@ XDG Base Directory variables that locate `bcs.conf` and the response dump. Stand
 - **Affects:** `bcs.conf` and `policy.conf` cascade — `$XDG_CONFIG_HOME/bcs/bcs.conf` is the user-level config layer (overrides `/etc/bcs.conf`, `/etc/bcs/bcs.conf`, `/usr/local/etc/bcs/bcs.conf`)
 - **Consumed:** `_conf_search_paths()`; policy resolution in `_load_policy()`
 
+### `XDG_CACHE_HOME`
+
+- **Default:** `$HOME/.cache`
+- **Affects:** the result cache (`$XDG_CACHE_HOME/bcs/<sha256>`; see `BCS_CACHE`)
+- **Consumed:** `cmd_check()` cache setup
+
 ### `XDG_STATE_HOME`
 
 - **Default:** `$HOME/.local/state`
@@ -3742,7 +3888,7 @@ These variables are set by `bcs` itself at runtime. They are documented here so 
 
 - **Set by:** `cmd_check()` exports this from `--json` / `BCS_JSON`
 - **Values:** `0` or `1`
-- **Consumed:** all four `_llm_*` backend bodies
+- **Consumed:** four of the five `_llm_*` backend bodies (`_llm_anthropic` does not read it; its JSON request differs only in the prompt `cmd_check()` builds)
 
 When `1`, each backend flips its native JSON-output knob:
 
@@ -3753,6 +3899,14 @@ When `1`, each backend flips its native JSON-output knob:
 
 Override the flag via `-j`/`--json` or `BCS_JSON=1` rather than setting `BCS_JSON_MODE` directly. Setting it externally without taking the rest of the JSON-rendering path (envelope wrap, schema validation in `_render_json_output()`) produces inconsistent output.
 
+### `BCS_CHECK_ACTIVE`
+
+- **Set by:** `_llm_claude_cli()` exports `1` into the Claude Code CLI session it starts
+- **Values:** unset, or any non-empty value
+- **Consumed:** the recursion guard in `cmd_check()`, right after option parsing
+
+A `bcs check` that starts while this variable is set exits 1 with `Recursive bcs check detected` instead of nesting a second LLM call inside the first. It stops an agent with shell access, or a user hook, from calling `bcs check` from within a check. A stale value left in an interactive shell blocks every check until it is unset.
+
 ---
 
 # Compliance Checking Reference
@@ -3761,10 +3915,10 @@ This section summarises key rules that are frequently misapplied during automate
 
 ## Severity
 
-- **VIOLATION**: Code is incorrect, unsafe, or clearly breaks a mandatory (MUST/SHALL) rule.
-- **WARNING**: Style deviation, SHOULD/RECOMMENDED level, or intentional design choice that deviates from a reference pattern.
+- **VIOLATION**: a finding under a `core`-tier rule.
+- **WARNING**: a finding under a `recommended`- or `style`-tier rule, including an intentional design choice that deviates from a reference pattern.
 
-When a rule says "prefer X over Y", using Y is a WARNING at most — not a VIOLATION.
+A "prefer X over Y" clause inside a core rule is not part of what that rule enforces. Report Y, if at all, under the recommended- or style-tier rule that owns the preference (BCS0505 for increment style, for example), whose tier makes it a WARNING.
 
 A finding's severity comes from the rule's **Tier:** line and from nothing else: a `core` rule yields a VIOLATION, reported as `[ERROR]`; a `recommended` or `style` rule yields a WARNING, reported as `[WARN]`. Words such as "must" or "mandatory" inside a recommended- or style-tier rule say how to satisfy that rule; they do not raise its findings to `[ERROR]`.
 
@@ -3814,4 +3968,4 @@ The `IFS=value command` form modifies IFS only for the duration of that command.
 - `return 0` from `main()` instead of `exit 0` — functionally equivalent for non-sourced scripts (WARNING at most, not VIOLATION)
 - Config search paths adjusted from the BCS0111 reference order — acceptable when documented in help text
 - `local` declarations between logical sections within a function — permitted by BCS0401 ("Declarations may appear mid-body... between logical sections"), only prohibited inside loops
-- Option bundling includes arg-taking options — BCS0805 documents that the user must place arg-taking options last in a bundle; this is the user's responsibility, not a script defect
+- Option bundling includes arg-taking options — BCS0805 documents that the user must place arg-taking options last in a bundle; this is the user's responsibility, not a script defect. The argument itself is always a separate word (`-vo FILE`, never `-voFILE` or `--output=FILE`; BCS0801)

@@ -1038,14 +1038,18 @@ _llm_anthropic() {
   # server-side cache TTL (~5 min, refreshed on use) read it from cache --
   # much cheaper and a faster prefill. All current claude-* models support
   # prompt caching and the standard far exceeds the minimum cacheable size.
+  # The prompts go to jq through --rawfile from a builtin printf, never as
+  # --arg: Linux refuses any one argv string over 128 KiB (MAX_ARG_STRLEN), and
+  # the standard alone came within 643 bytes of that. The other three API
+  # backends build their payloads the same way.
   local -- payload
   payload=$(jq -n \
     --arg model "$model" \
     --argjson max_tokens "$max_tokens" \
     --argjson thinking "$thinking_json" \
     --argjson effort_cfg "$effort_json" \
-    --arg system "$sys" \
-    --arg user "$usr" \
+    --rawfile system <(printf '%s' "$sys") \
+    --rawfile user <(printf '%s' "$usr") \
     '{model: $model, max_tokens: $max_tokens,
       system: [{type: "text", text: $system,
                 cache_control: {type: "ephemeral"}}],
@@ -1118,8 +1122,8 @@ _llm_ollama() {
       --argjson num_predict "$num_predict" \
       --argjson num_ctx "$num_ctx" \
       --arg keep_alive "$keep_alive" \
-      --arg system "$sys" \
-      --arg user "$usr" \
+      --rawfile system <(printf '%s' "$sys") \
+      --rawfile user <(printf '%s' "$usr") \
       '{model: $model, stream: false, format: "json",
         keep_alive: ($keep_alive | tonumber? // $keep_alive),
         options: {num_predict: $num_predict, num_ctx: $num_ctx},
@@ -1131,8 +1135,8 @@ _llm_ollama() {
       --argjson num_predict "$num_predict" \
       --argjson num_ctx "$num_ctx" \
       --arg keep_alive "$keep_alive" \
-      --arg system "$sys" \
-      --arg user "$usr" \
+      --rawfile system <(printf '%s' "$sys") \
+      --rawfile user <(printf '%s' "$usr") \
       '{model: $model, stream: false,
         keep_alive: ($keep_alive | tonumber? // $keep_alive),
         options: {num_predict: $num_predict, num_ctx: $num_ctx},
@@ -1198,8 +1202,8 @@ _llm_openai() {
       --arg model "$model" \
       --argjson max_tokens "$max_tokens" \
       --arg reasoning "$reasoning" \
-      --arg system "$sys" \
-      --arg user "$usr" \
+      --rawfile system <(printf '%s' "$sys") \
+      --rawfile user <(printf '%s' "$usr") \
       '{model: $model, max_completion_tokens: $max_tokens,
         response_format: {type: "json_object"},
         messages: [{role: "system", content: $system}, {role: "user", content: $user}]}
@@ -1210,8 +1214,8 @@ _llm_openai() {
       --arg model "$model" \
       --argjson max_tokens "$max_tokens" \
       --arg reasoning "$reasoning" \
-      --arg system "$sys" \
-      --arg user "$usr" \
+      --rawfile system <(printf '%s' "$sys") \
+      --rawfile user <(printf '%s' "$usr") \
       '{model: $model, max_completion_tokens: $max_tokens,
         messages: [{role: "system", content: $system}, {role: "user", content: $user}]}
        + (if $reasoning == "" then {} else {reasoning_effort: $reasoning} end)') \
@@ -1278,8 +1282,8 @@ _llm_google() {
       --argjson max_tokens "$max_tokens" \
       --argjson think_budget "$think_budget" \
       --argjson emit_thinking "$emit_thinking" \
-      --arg system "$sys" \
-      --arg user "$usr" \
+      --rawfile system <(printf '%s' "$sys") \
+      --rawfile user <(printf '%s' "$usr") \
       '{systemInstruction: {parts: [{text: $system}]},
         contents: [{role: "user", parts: [{text: $user}]}],
         generationConfig: ({maxOutputTokens: $max_tokens,
@@ -1293,8 +1297,8 @@ _llm_google() {
       --argjson max_tokens "$max_tokens" \
       --argjson think_budget "$think_budget" \
       --argjson emit_thinking "$emit_thinking" \
-      --arg system "$sys" \
-      --arg user "$usr" \
+      --rawfile system <(printf '%s' "$sys") \
+      --rawfile user <(printf '%s' "$usr") \
       '{systemInstruction: {parts: [{text: $system}]},
         contents: [{role: "user", parts: [{text: $user}]}],
         generationConfig: ({maxOutputTokens: $max_tokens}

@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
 # BCS Core-Rules Cheat-Sheet
 
-The **34 core-tier rules** — the `[ERROR]` set. A violation of any of these is a real
+The **33 core-tier rules** — the `[ERROR]` set. A violation of any of these is a real
 correctness or safety bug, and `bcs check --strict` (or any check with core findings) exits
 non-zero. This is the minimum bar for "it works and won't bite you."
 
@@ -15,7 +15,6 @@ Icons: ◉ info · ▲ caution · ✓ correct · ✗ wrong.
 ## 1 · Script Structure & Layout
 - **BCS0101 Strict Mode** — `set -euo pipefail` is mandatory; the first executable line after the shebang, comments, and shellcheck directives.
 - **BCS0102 Shebang** — first line is a shebang: `#!/bin/bash`, `#!/usr/bin/bash`, or `#!/usr/bin/env bash`.
-- **BCS0106 File Extensions** — executables use `.sh` or no extension (PATH executables: none); libraries use `.sh`/`.bash` and are non-executable.
 - **BCS0110 Cleanup and Traps** — define the cleanup function and set its trap *before* any code creates temporary resources.
 
 ## 2 · Variables & Data Types
@@ -39,7 +38,7 @@ Icons: ◉ info · ▲ caution · ✓ correct · ✗ wrong.
 
 ## 6 · Error Handling
 - **BCS0601 Exit on Error** — `set -euo pipefail`: `-e` exits on failure, `-u` on unset variables, `-o pipefail` on any failed pipeline stage.
-- **BCS0603 Trap Handling** — install cleanup traps early, before creating any resource.
+- **BCS0603 Trap Handling** — install cleanup traps early, before creating any resource; trap `EXIT` alone (it runs on INT/TERM too), since `trap 'cleanup $?' SIGINT SIGTERM EXIT` turns an interrupted run into exit 0.
 - **BCS0604 Checking Return Values** — check the return value of every critical operation.
 - **BCS0606 Conditional Declarations** — under `set -e`, an `&&` chain built on an arithmetic test must end with `||:` (or be inverted with `||`), since a false `(( ))` returns exit 1.
 
@@ -47,7 +46,7 @@ Icons: ◉ info · ▲ caution · ✓ correct · ✗ wrong.
 - **BCS0702 STDOUT vs STDERR Separation** — data to stdout, all messages/diagnostics to stderr, so `$(...)` capture and pipelines stay clean.
 
 ## 8 · Command-Line Arguments
-- **BCS0801 Standard Parsing Pattern** — parse with `while (($#)); do case $1 in … esac; shift; done` and bundle combined short options.
+- **BCS0801 Standard Parsing Pattern** — parse with `while (($#)); do case $1 in … esac; shift; done` and bundle combined short options; an option's argument is always a separate word (`-o FILE`, `--output FILE`).
 - **BCS0803 Argument Validation** — confirm an option's argument exists before capturing it (`noarg "$@"`).
 
 ## 9 · File Operations
@@ -58,8 +57,8 @@ Icons: ◉ info · ▲ caution · ✓ correct · ✗ wrong.
 ## 10 · Security
 - **BCS1001 SUID/SGID Prohibition** — never set SUID/SGID on a Bash script. No exceptions.
 - **BCS1002 PATH Security** — set a known-good `PATH` at script start to prevent command hijacking.
-- **BCS1004 Eval Avoidance** — never `eval` untrusted input; prefer arrays and namerefs (see BCS0210).
-- **BCS1005 Input Sanitization** — validate and sanitize all input; whitelist over blacklist.
+- **BCS1004 Eval Avoidance** — never `eval` untrusted input; prefer arrays and namerefs (see BCS0210), and validate a variable name from outside the script before `${!name}`, `printf -v` or `local -n`.
+- **BCS1005 Input Sanitization** — validate and sanitize all input; whitelist over blacklist; validate an outside integer before any arithmetic context sees it.
 - **BCS1006 Temporary File Handling** — always create temp files with `mktemp`; never hardcode temp paths.
 
 ## 11 · Concurrency & Jobs
@@ -72,5 +71,5 @@ Icons: ◉ info · ▲ caution · ✓ correct · ✗ wrong.
 
 ---
 
-*This is the core subset. `recommended` (44) and `style` (22) rules round out the standard —*
+*This is the core subset. `recommended` (45) and `style` (22) rules round out the standard —*
 *see [`data/BASH-CODING-STANDARD.md`](../data/BASH-CODING-STANDARD.md) or run `bcs codes`.*

@@ -9,7 +9,7 @@ Code formatting, comments, development practices, debugging, dry-run patterns, a
 
 **Tier:** style
 
-- 2 spaces for indentation (never tabs)
+- 2 spaces for indentation, never tabs. Two exceptions, where the tab is syntax rather than layout: the body of a `<<-` heredoc, whose leading tabs Bash strips (BCS0304), and a Makefile recipe line, which must begin with a tab (BCS1212)
 - Lines under 120 characters (except URLs/paths)
 - When a line must exceed the limit, break it with `\` continuation
 
@@ -32,7 +32,7 @@ declare -r PROFILE_DIR=/etc/profile.d
 
 # correct — documents a non-obvious semantic
 # readarray quirk: single empty element means no results
-((fnd == 1)) && [[ -z ${found_files[0]} ]] && fnd=0
+((fnd == 1)) && [[ -z ${found_files[0]} ]] && fnd=0 ||:
 
 # wrong — paraphrases the statement below
 # Set verbose to 1
@@ -51,7 +51,7 @@ LLM-based checkers should flag comments that mechanically paraphrase the next li
 
 - One blank line between functions
 - One blank line between logical sections within functions
-- One blank line after section comments
+- One blank line before section comments, none between the comment and the code it marks
 - Blank lines before and after multi-line blocks
 - Never multiple consecutive blank lines
 - No blank lines between short, related statements
@@ -65,10 +65,10 @@ Section comments mark logical divisions within a script. They must be:
 - A single line
 - 2-4 words
 - Prefixed with a single `#` (no box-drawing characters, no ASCII art frames)
-- Followed by a blank line before the first marked statement
+- Placed directly above the first statement it marks, with a blank line before the comment
 
 ```bash
-# correct — single #, 2-4 words, blank line follows
+# correct — single #, 2-4 words, blank line before, none after
 # Default values
 declare -i VERBOSE=1 DEBUG=0
 
@@ -103,8 +103,8 @@ ${path##*/}                         # not $(basename "$path")
 ${path%/*}                          # not $(dirname "$path")
 ${var^^}                            # not $(echo "$var" | tr a-z A-Z)
 ${var,,}                            # not $(echo "$var" | tr A-Z a-z)
-[[ condition ]]                     # not [ condition ] or test
-var=$(command)                      # not var=`command`
+[[ condition ]]                     # not [ condition ] or test: cite BCS0501 or BCS0901
+var=$(command)                      # not backticks: cite BCS0302
 {1..10}                             # not $(seq 1 10)
 
 # not this rule — parsing a variable with an external tool: cite BCS0507
@@ -112,8 +112,10 @@ minor=$(echo "$tag" | cut -d. -f2)
 ```
 
 Parsing a shell variable with an external tool (`grep -oE`, `cut -d`, `sed -n`,
-`awk '{print $N}'`) is **BCS0507's** finding, not this rule's. This rule covers
-the remaining builtin substitutions listed above.
+`awk '{print $N}'`) is **BCS0507's** finding, not this rule's. The `[[ ]]` and
+`$()` lines above are listed for completeness only: a `[ ]` or `test` is owned by
+BCS0501 (strings, numbers) or BCS0901 (files), and a backtick by BCS0302. This rule
+covers the remaining builtin substitutions listed above.
 
 ## BCS1206 Static Analysis Directives
 
@@ -150,10 +152,11 @@ Severity of a finding comes from the rule's tier alone; see the Compliance Check
 
 **Tier:** recommended
 
-Gate debug output on an integer `DEBUG` variable (`declare -i DEBUG=${DEBUG:-0}`), send it to stderr, and never ship an unconditional `set -x`.
+Gate debug output on an integer `DEBUG` variable (`declare -i DEBUG=${DEBUG:-0}`, validated first because it comes from the environment: BCS1005), send it to stderr, and never ship an unconditional `set -x`. A trace prints every command with its values expanded, secrets included: keep `set -x` away from code that handles credentials.
 
 ```bash
-# correct
+# correct — among the globals, before die() exists, so the check exits by hand
+[[ ${DEBUG:-0} =~ ^[0-9]+$ ]] || { >&2 echo "${0##*/}: DEBUG must be a non-negative integer"; exit 22; }
 declare -i DEBUG=${DEBUG:-0}
 ((DEBUG)) && set -x ||:
 
@@ -161,7 +164,7 @@ declare -i DEBUG=${DEBUG:-0}
 export PS4='+ ${BASH_SOURCE##*/}:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}():} '
 
 # debug function
-debug() { ((DEBUG)) || return 0; >&2 _msg "$@"; }
+debug() { ((DEBUG)) || return 0; _msg "$RED⦿$NC" "$@"; }   # _msg writes to stderr (BCS0703)
 
 # runtime activation
 DEBUG=1 ./script.sh
@@ -193,27 +196,32 @@ Dry-run maintains identical control flow (same function calls, same logic paths)
 
 ```bash
 # correct — dependency injection
-declare -f FIND_CMD >/dev/null || FIND_CMD() { find "$@"; }
-# override in tests: FIND_CMD() { echo 'mocked_file.txt'; }
+declare -f find_cmd >/dev/null || find_cmd() { find "$@"; }
+# override in tests: find_cmd() { echo 'mocked_file.txt'; }
 
-# correct — test mode flag
+# correct — test mode flag, validated before declare -i evaluates it (BCS1005)
+[[ ${TEST_MODE:-0} =~ ^[0-9]+$ ]] || die 22 "Invalid TEST_MODE ${TEST_MODE@Q}"
 declare -i TEST_MODE=${TEST_MODE:-0}
 
-# correct — assert function
+# correct — assert function; it records the failure, because a test called from
+# `if` runs with set -e suspended (BCS0601) and carries on past a failed assert
+declare -i TEST_FAILED=0
 assert() {
   local -- expected=$1 actual=$2 msg=${3:-assertion}
   [[ $expected == "$actual" ]] || {
     error "FAIL: $msg: expected ${expected@Q}, got ${actual@Q}"
+    TEST_FAILED=1
     return 1
   }
 }
 
-# correct — test runner
+# correct — test runner: a test passes only if it returns 0 and no assert failed
 run_tests() {
   local -i passed=0 failed=0
   local -- fn
   while read -r _ _ fn; do
-    if "$fn"; then
+    TEST_FAILED=0
+    if "$fn" && ((TEST_FAILED == 0)); then
       passed+=1
     else
       failed+=1
@@ -261,13 +269,13 @@ Common helper functions:
 noarg() { (($# > 1)) || die 22 "Option ${1@Q} requires an argument"; }
 
 # Trim whitespace
-trim() { local -- v="$*"; v=${v#"${v%%[![:blank:]]*}"}; echo -n "${v%"${v##*[![:blank:]]}"}" ; }
+trim() { local -- v="$*"; v=${v#"${v%%[![:blank:]]*}"}; printf '%s' "${v%"${v##*[![:blank:]]}"}"; }
 
-# Debug variable display
-decp() { declare -p "$@" 2>/dev/null | sed 's/^declare -[a-zA-Z-]* //'; }
+# Debug variable display (an unknown name reports itself and returns 1)
+decp() { declare -p "$@" | sed 's/^declare -[a-zA-Z-]* //'; }
 
-# Pluralization
-s() { (( ${1:-1} == 1 )) || echo -n 's'; }
+# Pluralization (a string test: an arithmetic one would evaluate its argument)
+s() { [[ ${1:-1} == 1 ]] || printf 's'; }
 ```
 
 ## BCS1212 Makefile Installation
@@ -294,7 +302,13 @@ help        Show targets and variables
 PREFIX  ?= /usr/local
 BINDIR  ?= $(PREFIX)/bin
 MANDIR  ?= $(PREFIX)/share/man/man1
+# /etc/bash_completion.d only for a system prefix; a custom PREFIX keeps its
+# completions under itself instead of writing to the host's /etc
+ifeq ($(filter /usr /usr/local,$(PREFIX)),)
+COMPDIR ?= $(PREFIX)/share/bash-completion/completions
+else
 COMPDIR ?= /etc/bash_completion.d
+endif
 DESTDIR ?=
 ```
 
@@ -346,7 +360,11 @@ install -m 755 myscript $(DESTDIR)$(BINDIR)/myscript
 PREFIX  ?= /usr/local
 BINDIR  ?= $(PREFIX)/bin
 MANDIR  ?= $(PREFIX)/share/man/man1
+ifeq ($(filter /usr /usr/local,$(PREFIX)),)
+COMPDIR ?= $(PREFIX)/share/bash-completion/completions
+else
 COMPDIR ?= /etc/bash_completion.d
+endif
 DESTDIR ?=
 
 # Directory of this Makefile (trailing slash). Anchors source paths so
@@ -363,7 +381,8 @@ install:
 	@# Manpages (if present)
 	install -d $(DESTDIR)$(MANDIR)
 	install -m 644 $(srcdir)myscript.1 $(DESTDIR)$(MANDIR)/myscript.1
-	@# Bash completion (if present, skip if dir missing)
+	@# Bash completion: a COMPDIR under PREFIX is ours to create; a system one is used only if present
+	@case "$(COMPDIR)" in "$(PREFIX)"/*) install -d $(DESTDIR)$(COMPDIR) ;; esac
 	@if [ -d $(DESTDIR)$(COMPDIR) ]; then \
 	  install -m 644 $(srcdir).bash_completion $(DESTDIR)$(COMPDIR)/myscript; \
 	fi
@@ -379,7 +398,7 @@ check:
 	@echo 'myscript: OK'
 
 test:
-	cd tests && ./run_all_tests.sh
+	cd $(srcdir)tests && ./run_all_tests.sh
 
 help:
 	@echo 'Usage: make [target]'

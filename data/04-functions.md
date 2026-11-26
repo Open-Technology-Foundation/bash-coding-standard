@@ -212,6 +212,8 @@ Source libraries with existence check:
 source -- "$lib_path" || die 1 "Failed to source ${lib_path@Q}"
 ```
 
+Sourced as the left side of `||`, the library body runs with `set -e` suspended (BCS0601). That costs nothing when the library only defines functions, as above: the functions run later, under the caller's `set -e`. A syntax error still stops the source either way.
+
 ## BCS0408 Dependency Management
 
 **Tier:** recommended
@@ -272,14 +274,14 @@ bash_at_least() {
   (( BASH_VERSINFO[2] >= patch ))
 }
 
+# require_bash runs before the metadata, colours and messaging helpers exist, and on
+# the old Bash it is meant to reject: it must be self-contained, with no die() and no
+# syntax newer than Bash 3 (no ${var@Q})
 require_bash() {
   bash_at_least "$@" && return 0
-  local -- want="${1:-0}.${2:-0}.${3:-0}"
-  local -- have="${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}.${BASH_VERSINFO[2]}"
-  die 2 "requires Bash >= ${want@Q} (have ${have@Q})"
-  # OR:
-  # printf '%s: requires Bash >= %s (have %s)\n' "${FUNCNAME[0]}" "$want" "$have" >&2
-  # exit 2
+  >&2 printf '%s: requires Bash >= %s (have %s)\n' "${0##*/}" \
+    "${1:-0}.${2:-0}.${3:-0}" "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}.${BASH_VERSINFO[2]}"
+  exit 2
 }
 ```
 
@@ -292,15 +294,16 @@ require_bash() {
 [[ $BASH_VERSION > "5.2" ]]   # "5.10" < "5.2" under string compare
 ```
 
-A finding under this rule requires a version check to exist in the script. Violations: a compound `&&` comparison of `BASH_VERSINFO` components; a string comparison of `BASH_VERSION`; a guard placed after `shopt -s inherit_errexit` or other version-dependent code. Not a violation: having no guard.
+A finding under this rule requires a version check to exist in the script. Violations: a compound `&&` comparison of `BASH_VERSINFO` components; a string comparison of `BASH_VERSION`; a guard placed after `shopt -s inherit_errexit` or other version-dependent code; a guard that depends on anything defined after it (`die()`, colour variables, `SCRIPT_NAME`) or on syntax newer than the Bash it rejects (`${var@Q}`), so that it fails before its message prints. Not a violation: having no guard.
 
 `BASH_VERSINFO` indices: `[0]`=major, `[1]`=minor, `[2]`=patch, `[3]`=build, `[4]`=release status, `[5]`=machine type. Always compare integers per element; never compare `BASH_VERSION` as a string.
 
-When a script has a guard, call `require_bash` at script start, after `set -euo pipefail` (safe on any Bash) but before `shopt -s inherit_errexit` and any other version-dependent code:
+When a script has a guard, define `bash_at_least` and `require_bash` and call `require_bash` at script start, after `set -euo pipefail` (safe on any Bash) but before `shopt -s inherit_errexit` and any other version-dependent code:
 
 ```bash
 #!/usr/bin/bash
 set -euo pipefail
+# bash_at_least() and require_bash() as above, defined here
 require_bash 5 2
 shopt -s inherit_errexit
 ```
@@ -412,7 +415,8 @@ done < <(some_command)
 **Pattern 3 -- Temp file** (large output, binary data, or output consumed by multiple later passes):
 
 ```bash
-# global so the single-quoted trap (BCS0603) can expand it at EXIT time
+# global so the single-quoted trap (BCS0603) can expand it at EXIT time; a script that
+# already has an EXIT trap adds this removal to its cleanup() instead (one trap per signal)
 declare -g TEMP_FILE=''
 trap '[[ -z $TEMP_FILE ]] || rm -f -- "$TEMP_FILE"' EXIT
 TEMP_FILE=$(mktemp) || die 1 'mktemp failed'
@@ -425,7 +429,7 @@ second_pass < "$TEMP_FILE"
 
 ```bash
 exec 3< <(long_running_stream)
-while read -r -u 3 line; do
+while IFS= read -r -u 3 line; do
   process "$line"
 done
 exec 3<&-
