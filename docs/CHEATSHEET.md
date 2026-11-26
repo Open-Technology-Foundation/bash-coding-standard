@@ -58,7 +58,7 @@ Icons: ◉ info · ▲ caution · ✓ correct · ✗ wrong.
 - **BCS1001 SUID/SGID Prohibition** — never set SUID/SGID on a Bash script. No exceptions.
 - **BCS1002 PATH Security** — set a known-good `PATH` at script start to prevent command hijacking.
 - **BCS1004 Eval Avoidance** — never `eval` untrusted input; prefer arrays and namerefs (see BCS0210), and validate a variable name from outside the script before `${!name}`, `printf -v` or `local -n`.
-- **BCS1005 Input Sanitization** — validate and sanitize all input; whitelist over blacklist; validate an outside integer before any arithmetic context sees it.
+- **BCS1005 Input Sanitization** — validate and sanitize all input; whitelist over blacklist; validate an outside integer (program output too, when it can carry outside text) before any arithmetic context sees it; `--` before a variable pathname, except `find`, whose starting point must be absolute or `./`-prefixed.
 - **BCS1006 Temporary File Handling** — always create temp files with `mktemp`; never hardcode temp paths.
 
 ## 11 · Concurrency & Jobs

@@ -136,11 +136,11 @@ assert_equal 0 "$mismatched" 'all BCS codes match their section file' || true
 begin_test 'standard document line count in range'
 declare -i std_lines
 std_lines=$(wc -l < "$DATA_DIR"/BASH-CODING-STANDARD.md)
-if ((std_lines >= 1500 && std_lines <= 4000)); then
-  printf '  %s✓%s line count %d in range [1500-4000]\n' "$GREEN" "$NC" "$std_lines"
+if ((std_lines >= 1500 && std_lines <= 4500)); then
+  printf '  %s✓%s line count %d in range [1500-4500]\n' "$GREEN" "$NC" "$std_lines"
   TESTS_PASSED+=1
 else
-  printf '  %s✗%s line count %d outside range [1500-4000]\n' "$RED" "$NC" "$std_lines"
+  printf '  %s✗%s line count %d outside range [1500-4500]\n' "$RED" "$NC" "$std_lines"
   TESTS_FAILED+=1
 fi
 

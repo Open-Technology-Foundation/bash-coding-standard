@@ -2805,8 +2805,8 @@ IFS=','
 Never use `eval` with untrusted input. Almost every use case has a safer alternative. When `eval` cannot be avoided, the comment above it must say why, and its operand must be validated against a strict pattern first; an unexplained or unvalidated `eval` is a violation even on data believed to be trusted.
 
 ```bash
-# correct — arrays for dynamic commands
-local -a cmd=(find -- "$path" -name "$pattern")
+# correct — arrays for dynamic commands (search_dir is realpath output, BCS1005)
+local -a cmd=(find "$search_dir" -name "$pattern")
 "${cmd[@]}"
 
 # correct — indirect expansion (var_name validated as below)
@@ -2853,11 +2853,15 @@ read_into ANSWER
 
 **Tier:** core
 
-Validate and sanitize all user input. Use whitelist over blacklist. Pass `--` before any pathname operand that originates from variables or user input (`rm -- "$f"`, `cp -- "$src" "$dst"`) to prevent option injection via filenames beginning with `-`.
+Validate and sanitize all user input. Use whitelist over blacklist. Pass `--` before any pathname operand that originates from variables or user input (`rm -- "$f"`, `cp -- "$src" "$dst"`) to prevent option injection via filenames beginning with `-`; `find` needs a different guard (below).
 
 **Integers from outside.** Bash evaluates as arithmetic whatever reaches `declare -i`, `local -i`, an integer variable's assignment, `(( ))`, `$(( ))` or an array index, and an array subscript inside the value runs as a command: `n='a[$(cmd)]'; local -i x=$n` runs `cmd`. A value from outside the script (the command line, which includes the parameters of `main "$@"`; the environment; a config file; another program) must match an integer pattern (`^[0-9]+$`, or `^-?[0-9]+$` where negatives are allowed) before it gets there; check it once, where it enters. A value the script computed itself, a literal, `$#`, `$?` and `$!` need no check, and neither does a helper's parameter when every caller passes such a value.
 
+**Another program's output: the form decides, not the command's name.** Output that is a bare number whatever the data holds is a value the script computed and needs no check: `wc -l < "$f"` and `wc -c < "$f"` (the file on a redirection), `stat -c %s -- "$f"` (a format with no `%n`), `grep -c -- "$pat" "$f"` (one file), `date +%s`, `id -u`, `nproc`. Output that can carry outside text is outside: `wc -l -- "$f"` and `du -- "$f"` print the file name after the number, `stat -c '%s %n'` and `grep -c` over several files print names, and `cut`, `awk`, `sed`, `jq`, `head` and `curl` relay whatever the data holds. A file named `+BASH_VERSINFO[$(cmd)]` turns `n=$(wc -l -- "$f")` into a command when `n` is an integer.
+
 **Scope of `--`.** Every command that takes a pathname operand, read-only ones and builtins included: `cat`, `head`, `sort`, `grep`, `wc`, `stat`, `diff`, `source` and `cd` parse a leading dash exactly as `rm` does, and "read-only" is no defence — a file named `-o/etc/cron.d/job` turns `sort "$f"` into a write. The `--` is owed when an operand **begins with an expansion** (`"$f"`, `"$dir"/x`, `"${files[@]}"`, `"$(cmd)"/x`). It is **not** owed, and its absence is never a finding, when the operand begins with literal text (`./"$f"`, `/etc/"$name"`: it cannot start with a dash), when the variable is an option's argument (`sort -o "$out"`, `grep -f "$patterns"`), for a redirection (`< "$file"`), inside `[[ ]]`, or for a command that takes no pathname (`echo`, `printf`, `tr`). Place it before the first operand, which is not always the pathname: `grep -- "$pattern" "$file"`, `chmod -- 644 "$f"`, `awk -- 'prog' "$f"` (after the program, `awk` reads `--` as a filename).
+
+**`find` is the exception: `--` does not protect a starting point.** `find` reads a word that begins with `-` as the start of its expression even after `--`, so `find -- "$dir" -type f` with `dir=-delete` deletes everything under the current directory (GNU findutils). A starting point that begins with an expansion must be one that cannot begin with a dash: an absolute path (`realpath` output) or a relative one given `./`. Guard the `./`, because it turns an absolute path into a relative one (`/etc` becomes `.//etc`): `[[ $dir == /* ]] || dir=./$dir`. A `--` before a starting point that is already safe is redundant, not a finding.
 
 ```bash
 # correct — validate integer before any arithmetic context sees it
@@ -2876,6 +2880,20 @@ local -i total=$((count * 2)) nargs=$#
 # not a finding — a helper whose every caller passes the script's own value
 cleanup() { local -i exitcode=${1:-$?}; trap - EXIT; exit "$exitcode"; }
 trap 'cleanup $?' EXIT
+
+# not a finding — output that is a bare number whatever the file holds
+local -i lines size
+lines=$(wc -l < "$file") || die 1 "Cannot read ${file@Q}"
+size=$(stat -c %s -- "$file") || die 1 "Cannot stat ${file@Q}"
+
+# wrong — wc prints the file name after the count: a file named
+# '+BASH_VERSINFO[$(cmd)]' runs cmd in the integer assignment
+local -i count
+count=$(wc -l -- "$file")
+
+# wrong — cut relays whatever the config line holds
+local -i port
+port=$(cut -d= -f2 <<< "$config_line")
 
 # correct — validate path within allowed directory
 # allowed_dir must be canonical (realpath output) with no trailing slash
@@ -2906,6 +2924,18 @@ cat ./"$name"
 wc -l /var/log/"$SCRIPT_NAME".log
 sort -o "$output" -- "$input"
 content=$(< "$file")
+
+# wrong — find reads a dash-leading starting point as its expression, even
+# after --: dir='-delete' deletes everything under the current directory
+find -- "$dir" -type f
+
+# correct — a find starting point that cannot begin with a dash
+[[ $dir == /* ]] || dir=./$dir
+find "$dir" -type f
+
+# not a finding — a redundant -- before an absolute starting point
+dir=$(realpath -e -- "$input") || die 3 "Directory not found ${input@Q}"
+find -- "$dir" -maxdepth 1 -type f
 ```
 
 `realpath -e` requires the path to exist; for an output path that does not exist yet, `realpath -m` resolves it without that requirement. Ranges such as `a-z` follow the locale's collation, so under `en_US.UTF-8` they also admit accented letters such as `é`. The patterns here stay safe that way (a letter is never a separator, a quote or a leading dash); where only ASCII may pass, test under `LC_ALL=C`.
