@@ -48,6 +48,19 @@ declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 #shellcheck disable=SC2155  # accepted: declare masks realpath's exit status (BCS0103)
 declare -r SCRIPT_PATH=$(realpath -- "$0")
 
+# not a finding — only builtins and keywords run (read, printf, [[ ]]; a
+# redirection is not a command), so there is nothing for PATH to protect
+set -euo pipefail
+shopt -s inherit_errexit
+declare -i count=0
+declare -- line
+while IFS= read -r line; do
+  if [[ -n $line ]]; then
+    count+=1
+  fi
+done < /etc/hosts
+printf '%d non-blank lines\n' "$count"
+
 # wrong — external commands run with whatever PATH the environment supplied
 set -euo pipefail
 shopt -s inherit_errexit
