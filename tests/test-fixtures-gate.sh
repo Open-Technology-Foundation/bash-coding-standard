@@ -67,6 +67,15 @@ case ${STUB_MODE:-findings} in
               | jq -R -s -c '{source: "bcs", meta: {},
                    comments: (split("\n") | map(select(. != "")
                               | {bcsCode: ., line: 1, level: "error"}))}' ;;
+  jsonmodel|jsonmixed)
+            # Every expected code, under a named model. jsonmixed answers for
+            # fixture 01-* as a second model, as an alias edited mid-run would.
+            m=model-a
+            [[ $STUB_MODE == jsonmixed && ${FIXTURE##*/} == 01-* ]] && m=model-b ||:
+            { expected ||:; } \
+              | jq -R -s -c --arg m "$m" '{source: "bcs", meta: {model: $m},
+                   comments: (split("\n") | map(select(. != "")
+                              | {bcsCode: ., line: 1, level: "error"}))}' ;;
   jsonfind) { expected ||:; } \
               | jq -R -s -c '{source: "bcs", meta: {},
                    comments: (split("\n") | map(select(. != "")
@@ -209,6 +218,31 @@ assert_contains "$(< "$SANDBOX"/score/accuracy-gpt5-mini-high.md)" 'clean/01-gre
   'markdown names the fixture too' ||:
 assert_contains "$(< "$SANDBOX"/score/accuracy-gpt5-mini-high.md)" '| BCS1203 | 6 | 2 |' \
   'markdown table carries the per-code counts' ||:
+
+# The model of every check, not only the first. A conf alias edited mid-run
+# split a 129-check baseline across two models on 2026-11-26 while the report
+# named one.
+begin_test 'accuracy scorer: the model of every check is recorded'
+run_child "$TEST_DIR"/accuracy/bcs-accuracy-score.sh jsonmodel -- \
+  -m pinned -e low -n 2 -o "$SANDBOX"/score "${FIXTURES[0]}" "${FIXTURES[1]}"
+declare -r MODEL_JSON="$SANDBOX"/score/accuracy-pinned-low.json
+assert_equal 0 "$RC" 'one model -> the run passes' ||:
+assert_equal 'model-a 4 1' \
+  "$(jq -r -- '"\(.model_id) \(.models["model-a"]) \(.models | length)"' "$MODEL_JSON" 2>/dev/null ||:)" \
+  'model_id, and every check counted under it' ||:
+
+begin_test 'accuracy scorer: a run split across models fails, labelled mixed'
+run_child "$TEST_DIR"/accuracy/bcs-accuracy-score.sh jsonmixed -- \
+  -m drifting -e low -n 2 -o "$SANDBOX"/score "${FIXTURES[0]}" "${FIXTURES[1]}"
+declare -r MIXED_JSON="$SANDBOX"/score/accuracy-drifting-low.json
+assert_equal 1 "$RC" 'two models -> the run fails' ||:
+assert_file_exists "$MIXED_JSON" 'the paid-for report is still written' ||:
+assert_equal 'mixed 2 2' \
+  "$(jq -r -- '"\(.model_id) \(.models["model-a"]) \(.models["model-b"])"' "$MIXED_JSON" 2>/dev/null ||:)" \
+  'labelled mixed, with both models counted' ||:
+assert_contains "$OUT" 'model-a x2, model-b x2' 'the failure names both models' ||:
+assert_contains "$(< "$SANDBOX"/score/accuracy-drifting-low.md)" 'Models seen' \
+  'markdown lists the models too' ||:
 
 run_child "$TEST_DIR"/accuracy/bcs-accuracy-score.sh json OPENAI_API_KEY=k MOCK_OLLAMA_UP=1 -- \
   -n 1 -o "$SANDBOX"/score "${FIXTURES[0]}"

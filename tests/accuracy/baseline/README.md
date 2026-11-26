@@ -30,6 +30,14 @@ while `bcs`'s built-in map says `claude-sonnet-4-6`, so a baseline recording
 only `sonnet` could be refreshed elsewhere against a different model under the
 same filename.
 
+The JSON also carries `models`, every model id the checks ran on with its count,
+because `bcs` re-reads the alias on every call: on 2026-11-26 an alias edited
+mid-run split a 129-check baseline across `claude-sonnet-5` and
+`claude-sonnet-5-5` while `model_id` named the first. More than one model now
+labels the report `mixed` and fails the run (the reports are still written).
+Measure with a canonical id (`-m claude-sonnet-5-5`, the measuring model since
+2026-11-26), which no alias can redirect.
+
 The earlier `gpt5-mini` / `low` baseline (recall 1.000, clean FP 0, stability
 1.000) has been deleted rather than kept for comparison. It was measured while
 `bcs check` still sent each fixture's `bcs-fixture-expect:` header to the

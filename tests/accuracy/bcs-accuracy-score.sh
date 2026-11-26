@@ -144,6 +144,13 @@ declare -i TP=0 FP=0 FN=0 INCONCLUSIVE=0 SCORED=0 CLEAN_FP=0 CLEAN_RUNS=0
 # on the measuring host against claude-sonnet-4-6 built in), so a baseline
 # recording only the alias cannot be reproduced or compared.
 declare -- MODEL_ID=''
+# Every check's model, counted. Reading only the first check's was not enough:
+# bcs re-reads bcs.conf on every call, so an alias edited mid-run (2026-11-26,
+# sonnet moved from claude-sonnet-5 to claude-sonnet-5-5 inside a 129-check
+# baseline) splits one report across two models while it names one. More than
+# one model labels the report "mixed" and fails the run; pass a canonical id
+# with -m to pin it.
+declare -A MODEL_RUNS=()
 declare -A PAIR_HITS=() PAIR_RUNS=() CODE_HIT=() CODE_TOT=()
 # Which codes the checker reported that the fixture did not plant, and how
 # often. FP was only ever a count, so a precision change could be seen but
@@ -262,7 +269,7 @@ main() {
 
   # Per-run scratch (accumulators are module globals, reset at declaration).
   local -i run i_tp i_fp i_fn
-  local -- json reported code pair fp_list
+  local -- json reported code pair fp_list model
 
   for ((run=1; run<=RUNS; run+=1)); do
     info "run $run/$RUNS ..."
@@ -281,8 +288,11 @@ main() {
       # Suppressed: a checker too old to carry .meta.model, or any jq hiccup,
       # leaves MODEL_ID empty and the report says "unknown" -- the scoring run
       # itself does not depend on it, so failing here must not abort a baseline.
-      [[ -n $MODEL_ID ]] \
-        || MODEL_ID=$(jq -r '.meta.model // empty' <<<"$json" 2>/dev/null) ||:
+      model=$(jq -r '.meta.model // empty' <<<"$json" 2>/dev/null) ||:
+      if [[ -n $model ]]; then
+        MODEL_RUNS[$model]=$(( ${MODEL_RUNS[$model]:-0} + 1 ))
+        [[ -n $MODEL_ID ]] || MODEL_ID=$model
+      fi
       reported=$(jq -r '.comments[].bcsCode // empty' <<<"$json" 2>/dev/null \
         | grep -oE 'BCS[0-9]{4}' | sort -u || true)
       expected=${EXP[$f]}
@@ -318,7 +328,22 @@ main() {
     done
   done
 
+  # The reports are written either way (the checks are paid for); a mix is
+  # then a failed run, so it cannot pass as one model's baseline.
+  local -- models_seen=''
+  local -a seen=()
+  if ((${#MODEL_RUNS[@]} > 1)); then
+    MODEL_ID=mixed
+    readarray -t seen < <(for model in "${!MODEL_RUNS[@]}"; do
+                            printf '%s x%d\n' "$model" "${MODEL_RUNS[$model]}"
+                          done | sort)
+    printf -v models_seen '%s, ' "${seen[@]}"
+  fi
+
   _emit_reports
+
+  [[ -z $models_seen ]] \
+    || die 1 "Checks ran on ${#MODEL_RUNS[@]} models (${models_seen%, }); the report is labelled mixed. Pass a canonical model id with -m"
 
   # CI gate: a reachable-but-unproductive backend (everything timed out or came
   # back inconclusive) must fail loudly when a backend is required, rather than
@@ -336,6 +361,14 @@ _emit_reports() {
   md="$OUT_DIR/accuracy-$slug-$EFFORT.md"
   json="$OUT_DIR/accuracy-$slug-$EFFORT.json"
   ts=$(date '+%Y-%m-%d %H:%M:%S')
+
+  # Every model the checks ran on, with its count: one row for a pinned run.
+  local -- models_md='' models_tsv='' m
+  for m in "${!MODEL_RUNS[@]}"; do
+    models_md+="\`$m\` x${MODEL_RUNS[$m]}, "
+    models_tsv+=$(printf '%s\t%s' "$m" "${MODEL_RUNS[$m]}")$'\n'
+  done
+  models_md=${models_md%, }
 
   # Aggregate precision/recall/F1.
   local -- precision recall f1
@@ -418,6 +451,7 @@ _emit_reports() {
 | Generated | $ts |
 | Model alias | \`$MODEL\` |
 | Model (resolved) | \`${MODEL_ID:-unknown}\` |
+| Models seen | ${models_md:-unknown} |
 | Effort | \`$EFFORT\` |
 | Runs per fixture | $RUNS |
 | Conclusive fixture-runs | $SCORED |
@@ -482,7 +516,7 @@ MD
   bcs_version=$(grep -m1 -oE '^declare -r VERSION=[0-9.]+' "$PROJECT_DIR"/bcs) ||:
   jq -n \
     --arg generated "$ts" --arg bcs_version "${bcs_version##*=}" \
-    --arg model "$MODEL" --arg model_id "$MODEL_ID" \
+    --arg model "$MODEL" --arg model_id "$MODEL_ID" --arg models "$models_tsv" \
     --arg effort "$EFFORT" --arg stability "$stability" \
     --arg rules "$rule_tsv" \
     --arg fp_rules "$fp_tsv" \
@@ -492,7 +526,10 @@ MD
     --argjson clean_fp "$CLEAN_FP" --argjson clean_runs "$CLEAN_RUNS" \
     --argjson clean_fp_rate "$clean_rate" \
     '{generated: $generated, bcs_version: $bcs_version, model: $model,
-      model_id: (if $model_id == "" then null else $model_id end), effort: $effort,
+      model_id: (if $model_id == "" then null else $model_id end),
+      models: ($models | split("\n") | map(select(. != "") | split("\t")
+               | {key: .[0], value: (.[1] | tonumber)}) | from_entries),
+      effort: $effort,
       runs: $runs, scored: $scored, inconclusive: $inconclusive,
       tp: $tp, fp: $fp, fn: $fn, precision: $precision, recall: $recall, f1: $f1,
       clean_fp: $clean_fp, clean_runs: $clean_runs, clean_fp_rate: $clean_fp_rate,
