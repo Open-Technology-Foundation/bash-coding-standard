@@ -472,11 +472,21 @@ collect() {
   for item in a b c; do echo "$item"; done
   while IFS= read -r line; do echo "$line"; done < "$file"
 }
+
+# wrong, but cite BCS0410, not BCS0202 — walk() calls itself
+walk() {
+  local -- dir=$1
+  for f in "$dir"/*; do                    # f: no declaration
+    [[ -d $f ]] && walk "$f" ||:
+  done
+}
 ```
 
 This rule owns a function variable with **no declaration at all** -- a bare
 assignment, or an undeclared `for`/`read` variable. Whether a declaration that
 does exist carries its type separator is BCS0201's question; cite BCS0202 here.
+In a function that calls itself, directly or through another function, the same
+defect belongs to BCS0410: cite that rule alone, not both.
 
 Without `local`, variables become global, overwrite same-named variables, persist after function return, and break recursive calls.
 
@@ -1274,7 +1284,7 @@ walk() {
 }
 
 # wrong — f leaks; after walk() returns, the caller's $f is whatever the
-# deepest recursion happened to leave behind
+# deepest recursion happened to leave behind (BCS0410, not BCS0202)
 walk() {
   local -- dir=$1
   for f in "$dir"/*; do                    # MISSING 'local -- f' above
@@ -1289,6 +1299,8 @@ Values passed via positional arguments (`$1`, `$2`, ...) are automatically per-c
 **Exception:** variables declared at file scope (or with `declare -g`) and intentionally used as shared accumulators are exempt -- e.g. `declare -a RESULTS` at file scope with `RESULTS+=("$f")` inside the recursive walker.
 
 LLM-based checkers should flag only assignments inside a recursive function that have neither a `local` declaration in the function nor a global declaration in the script -- including `for VAR in ...` which implicitly assigns `VAR`.
+
+This is the canonical rule for an undeclared variable in a recursive function: cite BCS0410 alone. BCS0202 owns the same defect in a function that does not recurse.
 
 ## BCS0411 Subshell Return-Value Patterns
 

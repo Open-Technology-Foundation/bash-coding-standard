@@ -73,11 +73,21 @@ collect() {
   for item in a b c; do echo "$item"; done
   while IFS= read -r line; do echo "$line"; done < "$file"
 }
+
+# wrong, but cite BCS0410, not BCS0202 — walk() calls itself
+walk() {
+  local -- dir=$1
+  for f in "$dir"/*; do                    # f: no declaration
+    [[ -d $f ]] && walk "$f" ||:
+  done
+}
 ```
 
 This rule owns a function variable with **no declaration at all** -- a bare
 assignment, or an undeclared `for`/`read` variable. Whether a declaration that
 does exist carries its type separator is BCS0201's question; cite BCS0202 here.
+In a function that calls itself, directly or through another function, the same
+defect belongs to BCS0410: cite that rule alone, not both.
 
 Without `local`, variables become global, overwrite same-named variables, persist after function return, and break recursive calls.
 
