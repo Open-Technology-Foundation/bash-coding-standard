@@ -136,7 +136,7 @@ bcscheck myscript.sh                       # Equivalent shim (defaults from bcs.
 
 The checker is shown the assembled standard minus Section 13 (the toolchain's own configuration reference: no rules, about 8% of the document), on every backend. `bcs display` and `bcs generate` still handle the whole document.
 
-Severity is never taken from the model. In JSON output a finding's `tier` and `level`, and in text output its `[ERROR]`/`[WARN]` tag, are recomputed locally from the cited rule's `**Tier:**` field, honouring `policy.conf`, so the severity that sets the exit code cannot be wrong because the model mislabelled a finding. `--strict` raises every recomputed severity to error. A finding citing a rule `policy.conf` disables is dropped; one citing a code with no tier of its own keeps the severity the model gave it.
+In JSON output a finding's `tier` and `level`, and in text output its `[ERROR]`/`[WARN]` tag, are recomputed locally from the cited rule's `**Tier:**` field, honouring `policy.conf`, so the severity that sets the exit code cannot be wrong because the model mislabelled a finding. `--strict` raises every recomputed severity to error. A finding citing a rule `policy.conf` disables is dropped; one citing a code with no tier of its own keeps the severity the model gave it.
 
 When `shellcheck` is on `PATH`, `bcs check` prepends its `--format=json -x` output to the LLM prompt as deterministic static-analysis context (cheap, precise AST-level findings that the LLM would otherwise rediscover). Disable per-call with `--no-shellcheck` or globally via `BCS_SHELLCHECK=0` in `bcs.conf`.
 
