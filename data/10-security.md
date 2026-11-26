@@ -158,7 +158,7 @@ Validate and sanitize all user input. Use whitelist over blacklist. Guard any pa
 - **A program that supports `--`** accepts it as the end of its options and reads every later word as an operand. The GNU coreutils (`rm`, `cp`, `mv`, `cat`, `head`, `tail`, `sort`, `wc`, `stat`, `du`, `chmod`, `ln`, `mkdir`, `ls`, `realpath`, `basename`, `dirname` ...), `diff`, `grep`, `sed`, `awk`, `shellcheck` and the Bash builtins `cd` and `source` all do. For these `--` is the guard, owed even when the variable holds an absolute path. Place it before the first operand, which is not always the pathname: `grep -- "$pattern" "$file"`, `chmod -- 644 "$f"`, `awk -- 'prog' "$f"`.
 - **A program that does not support `--`** needs an operand that cannot begin with `-`: an absolute path (`realpath` output) or `./` before a relative one, added only when the path is relative, because `./` turns `/etc` into `.//etc`, which is relative: `[[ $f == /* ]] || f=./$f`.
 
-**`--` is only for programs that support it.** Elsewhere it guards nothing, or becomes data: `find` reads a word that begins with `-` as the start of its expression even after `--`, so `find -- "$dir" -type f` with `dir=-delete` deletes everything under the current directory (GNU findutils); `awk` after its program text opens `--` as a file; `echo -- x` prints `-- x`. For such a program an operand that can begin with `-` is a finding whether or not `--` stands before it. Where support is in doubt, read the program's manual or probe it: `prog -- -x` must take `-x` as an operand. A `--` before an operand that is already safe (`find -- "$abs"`) changes nothing and is not a finding, but do not write one.
+**`--` is only for programs that support it.** Elsewhere it guards nothing, or becomes data: `find` reads a word that begins with `-` as the start of its expression even after `--`, so `find -- "$dir" -type f` with `dir=-delete` deletes everything under the current directory (GNU findutils); `awk` after its program text opens `--` as a file; `echo -- x` prints `-- x`. For such a program an operand that can begin with `-` is a finding whether or not `--` stands before it. Where support is in doubt, read the program's manual or probe it: `prog -- -x` must take `-x` as an operand. A `--` given to a program that does not support it is itself a finding, even before an operand that is already safe: `find` never takes `--` (`find -- "$abs"` protects nothing and tells the reader it does), and for `awk` after its program or for `echo` it becomes data.
 
 No guard is owed, and its absence is never a finding, when the operand begins with literal text (`./"$f"`, `/etc/"$name"`: it cannot start with a dash), when the variable is an option's argument (`sort -o "$out"`, `grep -f "$patterns"`), for a redirection (`< "$file"`), inside `[[ ]]`, or for a command that takes no pathname (`echo`, `printf`, `tr`).
 
@@ -231,11 +231,13 @@ content=$(< "$file")
 # wrong — awk supports -- only before its program text; after it, awk opens -- as a file
 awk '{print $1}' -- "$file"
 
-# wrong — find reads a dash-leading starting point as its expression, even
-# after --: dir='-delete' deletes everything under the current directory
+# wrong — dir comes straight from the command line, and find takes no --: it
+# reads a dash-leading starting point as its expression even after --, so
+# dir='-delete' deletes everything under the current directory
+dir=$1
 find -- "$dir" -type f
 
-# correct — find does not support -- here: give it a starting point that cannot begin with a dash
+# correct — give find a starting point that cannot begin with a dash
 [[ $dir == /* ]] || dir=./$dir
 find "$dir" -type f
 
@@ -243,7 +245,15 @@ find "$dir" -type f
 dir=$(realpath -e -- "$input") || die 3 "Directory not found ${input@Q}"
 find "$dir" -maxdepth 1 -type f
 
-# not a finding, though it changes nothing: -- before a starting point that is already safe
+# correct — a helper whose every caller passes realpath output needs no guard of its own
+scan() {
+  local -- dir=$1
+  find "$dir" -maxdepth 1 -type f
+}
+dir=$(realpath -e -- "$input") || die 3 "Directory not found ${input@Q}"
+scan "$dir"
+
+# wrong — -- before find's starting point, even a safe one: find takes no --
 find -- "$dir" -maxdepth 1 -type f
 ```
 

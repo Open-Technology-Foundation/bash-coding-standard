@@ -49,7 +49,7 @@ report() {
     count+=1
     total+=$size
     printf '%10d  %s\n' "$size" "$path" >> "$TEMP_FILE"
-  done < <(find -- "$dir" -maxdepth 1 -type f -print0)
+  done < <(find "$dir" -maxdepth 1 -type f -print0)
   sort -rn -- "$TEMP_FILE"
   printf '%d files, %d bytes\n' "$count" "$total"
 }
