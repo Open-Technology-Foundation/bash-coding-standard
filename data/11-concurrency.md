@@ -167,6 +167,10 @@ read -r -t 10 -p 'Enter value: ' value || value='default'
 # ConnectTimeout bounds connection only — wrap in `timeout` to bound total runtime
 timeout 300 ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" 'command'
 curl --connect-timeout 10 --max-time 60 "$url"
+
+# wrong — no timeout of any kind: a server that accepts the connection and
+# never answers stalls the script indefinitely
+curl -fsS https://example.com/status.json
 ```
 
 ## BCS1105 Exponential Backoff
