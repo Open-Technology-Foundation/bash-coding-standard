@@ -8,7 +8,7 @@
 
 # Default model. May be a built-in alias (sonnet, opus, haiku, flash, pro,
 # flash-lite, gpt5, gpt5-mini, qwen, qwen-small) or a canonical model ID
-# (claude-sonnet-4-6, gemini-2.5-flash, gpt-5, qwen3.5:14b, ...). The backend is
+# (claude-sonnet-5-5, gemini-2.5-flash, gpt-5, qwen3.5:14b, ...). The backend is
 # resolved from the alias-expanded name:
 #   claude-*           -> Anthropic API
 #   gemini-*           -> Google Gemini API

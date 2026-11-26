@@ -283,14 +283,14 @@ out=$(PATH="$sentinel_dir:$PATH" HOME="$sentinel_home" XDG_CONFIG_HOME="$sentine
   BCS_CONF_DIR="$sentinel_home" \
   BCS_MODEL=claude-code \
   "$BCS_CMD" check -m claude-code -- "$sentinel_script" 2>&1 || true)
-assert_contains "$out" "resolved from model 'claude-sonnet-4-6'" \
+assert_contains "$out" "resolved from model 'claude-sonnet-5-5'" \
   'cycle broken; resolves to sonnet alias' || true
 
 begin_test 'claude-code:claude-code suffix resolves to sonnet'
 out=$(PATH="$sentinel_dir:$PATH" HOME="$sentinel_home" XDG_CONFIG_HOME="$sentinel_home" \
   BCS_CONF_DIR="$sentinel_home" \
   "$BCS_CMD" check -m claude-code:claude-code -- "$sentinel_script" 2>&1 || true)
-assert_contains "$out" "resolved from model 'claude-sonnet-4-6'" \
+assert_contains "$out" "resolved from model 'claude-sonnet-5-5'" \
   'literal-suffix cycle broken' || true
 
 begin_test 'BCS_MODEL=opus on bare sentinel still resolves to claude-opus-4-8'

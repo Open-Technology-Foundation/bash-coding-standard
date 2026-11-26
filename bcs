@@ -58,7 +58,7 @@ declare -a _TMP_CLEANUP=()
 # Override or extend in bcs.conf via `MODEL_ALIASES[name]=canonical-id`.
 declare -A MODEL_ALIASES=(
   [opus]=claude-opus-4-8
-  [sonnet]=claude-sonnet-4-6
+  [sonnet]=claude-sonnet-5-5
   [haiku]=claude-haiku-4-5
   [flash]=gemini-2.5-flash
   [pro]=gemini-3.1-pro-preview
@@ -337,7 +337,7 @@ ${BOLD}Model selection:$NC
   Built-in aliases (extend or override in bcs.conf via MODEL_ALIASES[k]=v):
 
     opus       -> claude-opus-4-8
-    sonnet     -> claude-sonnet-4-6        (default)
+    sonnet     -> claude-sonnet-5-5        (default)
     haiku      -> claude-haiku-4-5
     flash      -> gemini-2.5-flash
     pro        -> gemini-3.1-pro-preview

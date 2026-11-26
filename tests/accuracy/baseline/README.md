@@ -25,10 +25,10 @@ against these numbers, not against memory.
 Each JSON carries both `model` (the alias as typed) and `model_id` (the
 canonical ID the checks actually ran against, read back from the checker's own
 JSON envelope). Compare on `model_id`: an alias is not portable. On the
-measuring host `/etc/bcs.conf` sets `MODEL_ALIASES[sonnet]=claude-sonnet-5`,
-while `bcs`'s built-in map says `claude-sonnet-4-6`, so a baseline recording
-only `sonnet` could be refreshed elsewhere against a different model under the
-same filename.
+measuring host `/etc/bcs.conf` mapped `sonnet` to `claude-sonnet-5` while
+`bcs`'s built-in map said `claude-sonnet-4-6` (the built-in has been
+`claude-sonnet-5-5` since 2.0.11), so a baseline recording only `sonnet` could
+be refreshed elsewhere against a different model under the same filename.
 
 The JSON also carries `models`, every model id the checks ran on with its count,
 because `bcs` re-reads the alias on every call: on 2026-11-26 an alias edited

@@ -163,6 +163,11 @@ assert_payload_match anthropic claude-sonnet-5 max \
   '.thinking.type == "adaptive" and .output_config.effort == "max"' \
   'sonnet-5 -e max -> adaptive + effort=max'
 
+# The built-in sonnet alias's target at the default effort: the default request.
+assert_payload_match anthropic claude-sonnet-5-5 medium \
+  '.thinking.type == "adaptive" and .output_config.effort == "medium" and (.thinking | has("budget_tokens") | not)' \
+  'sonnet-5-5 -e medium -> adaptive + effort=medium, no budget'
+
 assert_payload_match anthropic claude-fable-5-1 high \
   '.thinking.type == "adaptive" and .output_config.effort == "high"' \
   'fable-5-1 -e high -> adaptive + effort=high'

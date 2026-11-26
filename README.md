@@ -123,7 +123,7 @@ Subcommands, frequency-ordered:
 ### `bcs check`
 
 ```bash
-bcs check myscript.sh                      # Default alias 'sonnet' (claude-sonnet-4-6)
+bcs check myscript.sh                      # Default alias 'sonnet' (claude-sonnet-5-5)
 bcs check -m opus deploy.sh                # Alias-expanded to claude-opus-4-8
 bcs check -m gpt5 -e high deploy.sh        # OpenAI gpt-5 with reasoning_effort=medium
 bcs check -m claude-code:opus ci.sh        # Claude Code CLI with the opus alias (-e has no effect here)
@@ -197,7 +197,7 @@ Set `MODEL_ALIASES[name]=canonical-id` in `bcs.conf` to extend or override.
 | Alias | Canonical ID | Backend |
 |-------|--------------|---------|
 | `opus` | `claude-opus-4-8` | Anthropic |
-| `sonnet` (default) | `claude-sonnet-4-6` | Anthropic |
+| `sonnet` (default) | `claude-sonnet-5-5` | Anthropic |
 | `haiku` | `claude-haiku-4-5` | Anthropic |
 | `flash` | `gemini-2.5-flash` | Google |
 | `pro` | `gemini-3.1-pro-preview` | Google |

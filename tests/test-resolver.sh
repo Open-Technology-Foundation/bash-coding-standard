@@ -23,7 +23,7 @@ echo 'Testing: _expand_alias + _sniff_backend'
 
 declare -a builtins=(
   'opus|claude-opus-4-8'
-  'sonnet|claude-sonnet-4-6'
+  'sonnet|claude-sonnet-5-5'
   'haiku|claude-haiku-4-5'
   'flash|gemini-2.5-flash'
   'pro|gemini-3.1-pro-preview'

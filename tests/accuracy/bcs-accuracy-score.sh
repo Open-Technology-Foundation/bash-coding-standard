@@ -140,8 +140,8 @@ pick_model() {
 declare -i TP=0 FP=0 FN=0 INCONCLUSIVE=0 SCORED=0 CLEAN_FP=0 CLEAN_RUNS=0
 # The canonical model the checks actually ran against, read back from the first
 # successful check's JSON envelope. MODEL holds the alias as typed, and an alias
-# is not portable: bcs.conf can remap one (MODEL_ALIASES[sonnet]=claude-sonnet-5
-# on the measuring host against claude-sonnet-4-6 built in), so a baseline
+# is not portable: bcs.conf can remap one (the measuring host once mapped sonnet
+# to claude-sonnet-5 while bcs had claude-sonnet-4-6 built in), so a baseline
 # recording only the alias cannot be reproduced or compared.
 declare -- MODEL_ID=''
 # Every check's model, counted. Reading only the first check's was not enough:

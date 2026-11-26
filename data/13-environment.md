@@ -27,7 +27,7 @@ Default values for the `bcs check` subcommand. All have CLI flag equivalents tha
 
 ### `BCS_MODEL`
 
-- **Default:** `sonnet` (alias for `claude-sonnet-4-6`)
+- **Default:** `sonnet` (alias for `claude-sonnet-5-5`)
 - **Values:** a `MODEL_ALIASES` short name (e.g. `sonnet`, `opus`, `haiku`, `flash`, `gpt5`, `qwen`), `claude-code[:alias|:model]`, or any concrete model name routed by `_sniff_backend()` (`claude-*` → Anthropic, `gemini-*` → Google, `gpt-*`/`o[0-9]*` → OpenAI, anything else → Ollama)
 - **Override flag:** `-m`, `--model`
 - **Consumed:** `cmd_check()` initialiser
@@ -129,7 +129,7 @@ Extend or override in `bcs.conf`:
 
 ```bash
 MODEL_ALIASES[mymodel]=qwen3.5:14b
-MODEL_ALIASES[sonnet]=claude-sonnet-5     # repoint a built-in alias
+MODEL_ALIASES[opus]=claude-opus-5         # repoint a built-in alias
 ```
 
 Unknown names pass through `_expand_alias()` unchanged, so canonical model IDs need no alias entry. To pin a model across sessions, set `BCS_MODEL` to an alias or canonical ID in `bcs.conf`.
