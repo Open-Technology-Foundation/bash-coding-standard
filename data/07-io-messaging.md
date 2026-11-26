@@ -25,13 +25,12 @@ info 'Processing files...'           # → stderr (via messaging function)
 echo "$result"                       # → stdout (data output)
 printf '%s\n' "$result"              # → stdout (data output)
 
-# correct — place >&2 at the BEGINNING
+# correct — error text to stderr
 >&2 echo 'error: something failed'
 >&2 printf '%s\n' 'error: something failed'
 
-# discouraged (style, not a violation) — >&2 at end works but is harder to spot
+# not a BCS0702 finding — the stream is right; where >&2 sits is BCS0711's (style)
 echo 'error: something failed' >&2
-printf '%s\n' 'error: something failed' >&2
 
 # wrong — status on stdout, so data=$(./script.sh) captures it as data
 echo 'Processing files...'
@@ -40,10 +39,13 @@ echo "error: ${file@Q} not found"
 ```
 
 This rule owns the **stream**: status, progress or error text written to
-stdout, and data written to stderr, whatever command prints it. Whether a
-script that defines `info()`/`warn()`/`error()` ought to have used one in place
-of a raw `echo` is BCS0705's question -- cite BCS0702 for the misdirected
-stream, BCS0705 for the wrong mechanism, never both for one line.
+stdout, and data written to stderr, whatever command prints it. It does not
+own where `>&2` sits in the command: `cmd >&2` writes to the right stream and
+is never a BCS0702 finding; the preference for `>&2` first is BCS0711's
+(style). Whether a script that defines `info()`/`warn()`/`error()` ought to
+have used one in place of a raw `echo` is BCS0705's question -- cite BCS0702
+for the misdirected stream, BCS0705 for the wrong mechanism, never both for
+one line.
 
 Stream separation enables: `data=$(./script.sh)` captures only data, `./script.sh 2>errors.log` separates errors, `./script.sh | process` pipes data while showing messages.
 
@@ -182,7 +184,7 @@ get_value() {
 
 # wrong — mixing streams
 info "$result"                       # data via messaging function
-echo 'Processing...' >&2             # status by hand, though info() exists
+>&2 echo 'Processing...'             # status by hand, though info() exists
 
 # not this rule — no messaging functions here; the defect is the stream:
 # cite BCS0702
@@ -336,5 +338,17 @@ somecommand >>logfile 2>&1
 ```
 
 Use `2>/dev/null` or `2>file` when suppressing only stderr. The `&>` operator is for combined (stdout + stderr) redirection only.
+
+**`>&2` goes first.** Prefer `>&2` at the beginning of a command, where a reader scanning the left margin sees at once that the line writes to stderr. At the end it sends the text to the same stream and is only harder to spot: a style finding of this rule, never a BCS0702 one (BCS0702 owns the stream itself).
+
+```bash
+# correct — >&2 at the beginning
+>&2 echo 'error: something failed'
+>&2 printf 'not a file: %s\n' "${file@Q}"
+
+# not preferred — >&2 at the end works the same, but is harder to spot
+echo 'error: something failed' >&2
+printf 'not a file: %s\n' "${file@Q}" >&2
+```
 
 `&>` also cannot be written in the wrong order. Redirections apply left to right, so `cmd 2>&1 >file` points stderr at the original stdout before stdout moves to `file`: stderr never reaches the file.
