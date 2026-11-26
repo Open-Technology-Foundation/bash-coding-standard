@@ -4,7 +4,7 @@ set -euo pipefail
 shopt -s inherit_errexit shift_verbose extglob nullglob
 
 declare -rx PATH=/usr/local/bin:/usr/bin:/bin
-declare -r VERSION=1.0.0
+declare -r VERSION=1.0.1
 declare -r SCRIPT_NAME=${0##*/}
 declare -r CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/bcscheck
 
@@ -138,8 +138,8 @@ write_context() {
 
 main() {
   local -a files=()
-  local -- standard rules file key report ctx status prior_report pkey xbit
-  local -i n=0 lines rule_count
+  local -- standard rules file key report ctx status prior_report pkey xbit out_real
+  local -i n=0 lines rule_count rules_bytes
 
   while (($#)); do
     case $1 in
@@ -180,10 +180,15 @@ main() {
   RULES_SHA=${RULES_SHA%% *}
   readonly -- RULES_SHA
 
+  # Captured first: a substitution inside printf's arguments fails unseen, and
+  # an empty out path would send the reader to the wrong context files
+  rules_bytes=$(wc -c < "$rules") || die 1 "Cannot read ${rules@Q}"
+  out_real=$(realpath -- "$OUT_DIR") || die 1 "Cannot resolve ${OUT_DIR@Q}"
+
   # CONTEXT names are in out, REPORT names in cache; printed once to keep rows short
   printf 'standard\t%s\n' "$standard"
-  printf 'rules\t%s\t%d rules\t%d bytes\tmode %s\n' "$rules" "$rule_count" "$(wc -c < "$rules")" "$MODE"
-  printf 'out\t%s\ncache\t%s\n' "$(realpath -- "$OUT_DIR")" "$CACHE_DIR"
+  printf 'rules\t%s\t%d rules\t%d bytes\tmode %s\n' "$rules" "$rule_count" "$rules_bytes" "$MODE"
+  printf 'out\t%s\ncache\t%s\n' "$out_real" "$CACHE_DIR"
   printf 'STATUS\tLINES\tFILE\tCONTEXT\tREPORT\n'
 
   for file in "${files[@]}"; do

@@ -10,7 +10,7 @@ shopt -s inherit_errexit
 declare -rx PATH=~/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 #shellcheck source-path=SCRIPTDIR source=test-helpers.sh
-source "$(dirname "$0")"/test-helpers.sh
+source -- "$(dirname -- "$0")"/test-helpers.sh
 
 echo 'Testing: Makefile targets'
 
@@ -18,7 +18,7 @@ declare -- SANDBOX='' OUT=''
 declare -i RC=0
 
 trap '[[ -z $SANDBOX ]] || rm -rf -- "$SANDBOX"' EXIT
-SANDBOX=$(mktemp -d "${TMPDIR:-/tmp}"/bcs-make.XXXXXX) \
+SANDBOX=$(mktemp -d -- "${TMPDIR:-/tmp}"/bcs-make.XXXXXX) \
   || { >&2 echo 'Failed to create sandbox directory'; exit 1; }
 
 # run_make ARGS... -> fills RC and OUT (stdout+stderr)
