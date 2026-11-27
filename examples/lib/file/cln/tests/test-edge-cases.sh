@@ -165,6 +165,32 @@ test_mixed_valid_invalid_paths() {
   [[ ! -f "$temp_dir/file~" ]] && pass "Valid path still cleaned" || fail "Valid path should still be cleaned"
 }
 
+test_expression_named_directories() {
+  test_section "Directories Named Like find Expressions"
+
+  local -- temp_dir=''
+  local -i exit_code=0
+  # runs at this function's return, while temp_dir is still in scope, then clears itself
+  trap '[[ -z ${temp_dir:-} ]] || rm -rf -- "$temp_dir"; trap - RETURN' RETURN
+  temp_dir=$(mktemp -d) || { fail 'Cannot create a temp directory'; return 0; }
+
+  mkdir -- "$temp_dir"/-delete "$temp_dir"/!
+  touch -- "$temp_dir"/keep.txt "$temp_dir"/-delete/keep.txt "$temp_dir"/-delete/file~ "$temp_dir"/!/file~
+
+  # find reads a starting point that begins with '-' or is '!' as part of its
+  # expression; '-delete' once emptied the whole current directory
+  (cd -- "$temp_dir" && "$CLN" -P -- '!') >/dev/null 2>&1 || exit_code=$?
+  assert_success "$exit_code" "Directory named ! exits 0"
+  if [[ ! -f $temp_dir/!/file~ ]]; then pass "Matching file in ! removed"; else fail "Matching file in ! should be removed"; fi
+
+  exit_code=0
+  (cd -- "$temp_dir" && "$CLN" -P -- -delete) >/dev/null 2>&1 || exit_code=$?
+  assert_success "$exit_code" "Directory named -delete exits 0"
+  if [[ -f $temp_dir/keep.txt ]]; then pass "Current directory untouched"; else fail "Files outside the named directory were deleted"; fi
+  if [[ -f $temp_dir/-delete/keep.txt ]]; then pass "Non-matching file in -delete kept"; else fail "Non-matching file in -delete was deleted"; fi
+  if [[ ! -f $temp_dir/-delete/file~ ]]; then pass "Matching file in -delete removed"; else fail "Matching file in -delete should be removed"; fi
+}
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 # Run tests
@@ -177,6 +203,7 @@ test_symlink_option
 test_default_path
 test_verbose_cap
 test_mixed_valid_invalid_paths
+test_expression_named_directories
 
 # Print summary
 print_summary

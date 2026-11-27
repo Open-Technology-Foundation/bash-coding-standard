@@ -115,7 +115,7 @@ read_conf() {
   )
   for conf_file in "${search_paths[@]}"; do
     if [[ -f $conf_file && -r $conf_file ]]; then
-      readarray -t DELETE_FILES < <(grep -vE '^[[:space:]]*(#|$)' "$conf_file")
+      readarray -t DELETE_FILES < <(grep -vE -- '^[[:space:]]*(#|$)' "$conf_file")
       return 0
     fi
   done
@@ -201,17 +201,22 @@ main() {
   # Remove the last -o
   unset 'find_expr[-1]'
 
-  local -- file
+  local -- file start
   for path in "${paths[@]}"; do
     if [[ ! -d $path ]]; then
       warn "${path@Q} is not a directory. Skipping."
       continue
     fi
+    # find takes a starting point that begins with '-', or is '!' or '(', as
+    # part of its expression, '--' or not: a directory named '-delete' emptied
+    # the current directory. './' makes it a path; '/' or '.' first is safe.
+    start=$path
+    [[ $start == [/.]* ]] || start=./$start
     info "Searching directory ${path@Q}, depth $max_depth"
     ((VERBOSE > 1)) && info "$(decp find_expr)" ||:
     # First find matching files and store in array
     readarray -t found_files < <(
-        find "${symbolic[@]}" "$path" \
+        find "${symbolic[@]}" "$start" \
             -maxdepth "$max_depth" \
             -type f \
             \( "${find_expr[@]}" \) \
