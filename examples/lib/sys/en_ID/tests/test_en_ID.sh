@@ -1,255 +1,221 @@
 #!/usr/bin/env bash
+# Test suite for the en_ID locale.
+# Tests the compiled build in ../build by default. Set EN_ID_TEST_INSTALLED=1
+# to test the locale installed on this system instead.
+# Usage: test_en_ID.sh [CATEGORY|all]
 set -euo pipefail
+shopt -s inherit_errexit
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
-# Test script for en_ID locale
-# Usage: ./test_en_ID.sh [category]
+declare -- SCRIPT_PATH
+SCRIPT_PATH=$(realpath -- "$0")
+declare -r SCRIPT_PATH
+declare -r SCRIPT_NAME=${SCRIPT_PATH##*/} TESTS_DIR=${SCRIPT_PATH%/*}
+declare -r BUILD_DIR=${TESTS_DIR%/*}/build
 
-# Locale name varies between build and system
-declare LOCALE="en_ID.UTF-8"
-declare BUILD_DIR
-BUILD_DIR="$(dirname "$0")/../build"
-declare -r BUILD_DIR
-declare -i TESTS_PASSED=0
-declare -i TESTS_FAILED=0
+declare -ra CATEGORIES=(
+  LC_MONETARY LC_NUMERIC LC_TIME LC_TIME_EXT LC_MESSAGES
+  LC_PAPER LC_TELEPHONE LC_ADDRESS LC_NAME LC_MEASUREMENT
+  LC_CTYPE LC_COLLATE
+)
 
-# Colors for output
-declare -r RED='\033[0;31m'
-declare -r GREEN='\033[0;32m'
-declare -r YELLOW='\033[1;33m'
-declare -r NC='\033[0m' # No Color
+if [[ -t 1 && -t 2 ]]; then
+  declare -r RED=$'\033[0;31m' GREEN=$'\033[0;32m' YELLOW=$'\033[1;33m' NC=$'\033[0m'
+else
+  declare -r RED='' GREEN='' YELLOW='' NC=''
+fi
 
-# Test function
+# Every test command runs under this environment; build mode adds LOCPATH.
+declare -a LOCALE_ENV=(LC_ALL=en_ID.UTF-8)
+declare -i TESTS_PASSED=0 TESTS_FAILED=0
+
+die() {
+  local -i code=$1
+  local -- msg
+  shift
+  for msg in "$@"; do >&2 printf '%s: %s\n' "$SCRIPT_NAME" "$msg"; done
+  exit "$code"
+}
+
+[[ ${EN_ID_TEST_INSTALLED:-0} == [01] ]] \
+  || die 22 "EN_ID_TEST_INSTALLED must be 0 or 1, not ${EN_ID_TEST_INSTALLED@Q}"
+declare -ri TEST_INSTALLED=${EN_ID_TEST_INSTALLED:-0}
+
+# run_test DESCRIPTION EXPECTED COMMAND [ARG...]
+# Runs COMMAND under the locale being tested; standard input reaches COMMAND.
 run_test() {
-  local description="$1"
-  local command="$2"
-  local expected="$3"
-  
-  echo -n "Testing $description... "
-  
-  # Set locale path to our build directory or use system locale
-  local actual
-  if [[ "${USE_SYSTEM_LOCALE:-false}" == "true" ]]; then
-    actual=$(LC_ALL="$LOCALE" eval "$command" 2>/dev/null || echo "")
-  else
-    actual=$(LOCPATH="$BUILD_DIR" LC_ALL="$LOCALE" eval "$command" 2>/dev/null || echo "")
-  fi
-  
-  if [[ "$actual" == "$expected" ]]; then
-    echo -e "${GREEN}PASSED${NC}"
+  local -- description=$1 expected=$2 actual
+  shift 2
+  # stderr is captured so a failing command shows its reason under "Actual:"
+  actual=$(env "${LOCALE_ENV[@]}" "$@" 2>&1) ||:
+  if [[ $actual == "$expected" ]]; then
+    printf 'Testing %s... %sPASSED%s\n' "$description" "$GREEN" "$NC"
     TESTS_PASSED+=1
   else
-    echo -e "${RED}FAILED${NC}"
-    echo "  Expected: $expected"
-    echo "  Actual:   $actual"
+    printf 'Testing %s... %sFAILED%s\n' "$description" "$RED" "$NC"
+    printf '  Expected: %s\n  Actual:   %s\n' "$expected" "$actual"
     TESTS_FAILED+=1
   fi
 }
 
-# Test categories
+heading() { printf '\n%sTesting %s%s\n' "$YELLOW" "$1" "$NC"; }
+
 test_monetary() {
-  echo -e "\n${YELLOW}Testing LC_MONETARY${NC}"
-  
-  # Test currency symbol
-  run_test "currency symbol" "locale currency_symbol" "Rp"
-  
-  # Test international currency symbol  
-  run_test "int_curr_symbol" "locale int_curr_symbol" "IDR "
-  
-  # Test decimal point
-  run_test "mon_decimal_point" "locale mon_decimal_point" "."
-  
-  # Test thousands separator
-  run_test "mon_thousands_sep" "locale mon_thousands_sep" ","
+  heading LC_MONETARY
+  run_test 'currency symbol' Rp locale currency_symbol
+  run_test int_curr_symbol 'IDR ' locale int_curr_symbol
+  run_test mon_decimal_point . locale mon_decimal_point
+  run_test mon_thousands_sep , locale mon_thousands_sep
+  run_test p_cs_precedes 1 locale p_cs_precedes
+  run_test n_cs_precedes 1 locale n_cs_precedes
+  run_test n_sign_posn 1 locale n_sign_posn
+  run_test frac_digits 2 locale frac_digits
+  run_test int_frac_digits 2 locale int_frac_digits
+  run_test mon_grouping 3 locale mon_grouping
+  run_test p_sign_posn 1 locale p_sign_posn
+  run_test p_sep_by_space 0 locale p_sep_by_space
+  run_test n_sep_by_space 0 locale n_sep_by_space
+  run_test negative_sign - locale negative_sign
 }
 
 test_numeric() {
-  echo -e "\n${YELLOW}Testing LC_NUMERIC${NC}"
-  
-  # Test decimal point
-  run_test "decimal_point" "locale decimal_point" "."
-  
-  # Test thousands separator
-  run_test "thousands_sep" "locale thousands_sep" ","
-  
-  # Test number formatting - skip in build environment as printf needs system locale
-  if [[ "${USE_SYSTEM_LOCALE:-false}" == "true" ]]; then
-    run_test "number format" "printf %\'d 1234567" "1,234,567"
-  else
-    echo "  Note: Number formatting test requires system locale installation"
-  fi
+  heading LC_NUMERIC
+  run_test decimal_point . locale decimal_point
+  run_test thousands_sep , locale thousands_sep
+  run_test 'number format' 1,234,567 printf "%'d" 1234567
 }
 
 test_time() {
-  echo -e "\n${YELLOW}Testing LC_TIME${NC}"
-  
-  if [[ "${USE_SYSTEM_LOCALE:-false}" == "true" ]]; then
-    # Test date format
-    run_test "date format" "date -d '2024-01-15' +%x" "2024-01-15"
-    
-    # Test time format (24-hour)
-    run_test "time format" "date -d '2024-01-15 14:30:45' +%X" "14:30:45"
-    
-    # Test day/month names through date command
-    run_test "abbreviated Sunday" "date -d '2024-01-07' +%a" "Sun"
-    run_test "abbreviated Monday" "date -d '2024-01-08' +%a" "Mon"
-    
-    # Test full day names
-    run_test "full Sunday" "date -d '2024-01-07' +%A" "Sunday"
-    run_test "full Monday" "date -d '2024-01-08' +%A" "Monday"
-    
-    # Test month names
-    run_test "abbreviated January" "date -d '2024-01-15' +%b" "Jan"
-    run_test "full January" "date -d '2024-01-15' +%B" "January"
-  else
-    echo "  Note: Time format tests require system locale installation"
-    echo "  Skipping date/time formatting tests in build environment"
-  fi
-}
-
-test_messages() {
-  echo -e "\n${YELLOW}Testing LC_MESSAGES${NC}"
-  
-  # Test yes/no expressions (en_SG uses different patterns)
-  run_test "yesexpr" "locale yesexpr" "^[+1yY]"
-  run_test "noexpr" "locale noexpr" "^[-0nN]"
-  run_test "yesstr" "locale yesstr" "yes"
-  run_test "nostr" "locale nostr" "no"
-}
-
-test_paper() {
-  echo -e "\n${YELLOW}Testing LC_PAPER${NC}"
-  
-  # Test paper size (A4)
-  run_test "paper height" "locale height" "297"
-  run_test "paper width" "locale width" "210"
-}
-
-test_telephone() {
-  echo -e "\n${YELLOW}Testing LC_TELEPHONE${NC}"
-
-  # Test international format
-  run_test "tel_int_fmt" "locale tel_int_fmt" "+%c %a %l"
-
-  # Test domestic format (includes trunk prefix 0)
-  run_test "tel_dom_fmt" "locale tel_dom_fmt" "(0%a) %l"
-
-  # Test country code
-  run_test "int_prefix" "locale int_prefix" "62"
-
-  # Test international access code (generic prefix)
-  run_test "int_select" "locale int_select" "00"
-}
-
-test_address() {
-  echo -e "\n${YELLOW}Testing LC_ADDRESS${NC}"
-
-  # Test country codes
-  run_test "country_ab2" "locale country_ab2" "ID"
-  run_test "country_ab3" "locale country_ab3" "IDN"
-  run_test "country_num" "locale country_num" "360"
-
-  # Test extended address fields
-  run_test "country_name" "locale country_name" "Indonesia"
-  run_test "country_car" "locale country_car" "RI"
-  run_test "lang_name" "locale lang_name" "English"
-  run_test "lang_ab" "locale lang_ab" "en"
-  run_test "lang_term" "locale lang_term" "eng"
-}
-
-test_measurement() {
-  echo -e "\n${YELLOW}Testing LC_MEASUREMENT${NC}"
-
-  # Test measurement system (1 = metric)
-  run_test "measurement" "locale measurement" "1"
-}
-
-test_name() {
-  echo -e "\n${YELLOW}Testing LC_NAME${NC}"
-
-  # Test name format
-  run_test "name_fmt" "locale name_fmt" "%d%t%g%t%m%t%f"
+  heading LC_TIME
+  run_test 'date format' 2024-01-15 date -d 2024-01-15 +%x
+  run_test 'time format' 14:30:45 date -d '2024-01-15 14:30:45' +%X
+  run_test 'abbreviated Sunday' Sun date -d 2024-01-07 +%a
+  run_test 'abbreviated Monday' Mon date -d 2024-01-08 +%a
+  run_test 'full Sunday' Sunday date -d 2024-01-07 +%A
+  run_test 'full Monday' Monday date -d 2024-01-08 +%A
+  run_test 'abbreviated January' Jan date -d 2024-01-15 +%b
+  run_test 'full January' January date -d 2024-01-15 +%B
 }
 
 test_time_extended() {
-  echo -e "\n${YELLOW}Testing LC_TIME Extended${NC}"
-
-  # Test week settings (ISO 8601)
-  run_test "first_weekday" "locale first_weekday" "2"
-
-  # Test 12-hour format availability
-  run_test "am_pm" "locale am_pm" "AM;PM"
-  run_test "t_fmt_ampm" "locale t_fmt_ampm" "%I:%M:%S %p"
-
-  # Test combined datetime format (ISO-aligned)
-  if [[ "${USE_SYSTEM_LOCALE:-false}" == "true" ]]; then
-    run_test "datetime format" "date -d '2024-01-15 14:30:45' +%c" "Mon 2024-01-15 14:30:45"
-  fi
+  heading 'LC_TIME Extended'
+  run_test first_weekday 2 locale first_weekday
+  run_test am_pm 'AM;PM' locale am_pm
+  run_test t_fmt_ampm '%I:%M:%S %p' locale t_fmt_ampm
+  run_test 'datetime format' 'Mon 2024-01-15 14:30:45' date -d '2024-01-15 14:30:45' +%c
+  # ISO 8601 weeks: 7 days, Monday start, week 1 holds the first Thursday
+  run_test week-ndays 7 locale week-ndays
+  run_test week-1stday 19971130 locale week-1stday
+  run_test week-1stweek 4 locale week-1stweek
+  run_test date_fmt '%a %Y-%m-%d %T %Z' locale date_fmt
+  run_test '12-hour time' '02:30:45 PM' date -d '2024-01-15 14:30:45' +%r
 }
 
-# Main execution
-main() {
-  echo "======================================"
-  echo "Testing en_ID locale"
-  echo "======================================"
-  
-  # Check if locale is available (either system or build)
-  if locale -a 2>/dev/null | grep -q "en_ID"; then
-    echo "Using system locale en_ID"
-    USE_SYSTEM_LOCALE=true
-    # System locales often use .utf8 instead of .UTF-8
-    LOCALE="en_ID.utf8"
-  elif [[ -d "$BUILD_DIR/$LOCALE" ]]; then
-    echo "Using build directory locale"
-    USE_SYSTEM_LOCALE=false
-    LOCALE="en_ID.UTF-8"
-  else
-    echo -e "${RED}Error: Locale not found${NC}"
-    echo "Please run 'make compile' or 'make install' first"
-    exit 1
-  fi
-  
-  # Run specific test or all tests
-  local category="${1:-all}"
-  
-  case "$category" in
-    LC_MONETARY) test_monetary ;;
-    LC_NUMERIC) test_numeric ;;
-    LC_TIME) test_time ;;
-    LC_TIME_EXT) test_time_extended ;;
-    LC_MESSAGES) test_messages ;;
-    LC_PAPER) test_paper ;;
-    LC_TELEPHONE) test_telephone ;;
-    LC_ADDRESS) test_address ;;
-    LC_NAME) test_name ;;
+test_messages() {
+  heading LC_MESSAGES
+  run_test yesexpr '^[+1yY]' locale yesexpr
+  run_test noexpr '^[-0nN]' locale noexpr
+  run_test yesstr yes locale yesstr
+  run_test nostr no locale nostr
+}
+
+test_paper() {
+  heading LC_PAPER
+  run_test 'paper height' 297 locale height
+  run_test 'paper width' 210 locale width
+}
+
+test_telephone() {
+  heading LC_TELEPHONE
+  run_test tel_int_fmt '+%c %a %l' locale tel_int_fmt
+  # Domestic numbers carry the trunk prefix 0
+  run_test tel_dom_fmt '(0%a) %l' locale tel_dom_fmt
+  run_test int_prefix 62 locale int_prefix
+  # Indonesia has no single international prefix; these are the operators' codes
+  run_test int_select '001,008,007,009' locale int_select
+}
+
+test_address() {
+  heading LC_ADDRESS
+  run_test country_ab2 ID locale country_ab2
+  run_test country_ab3 IDN locale country_ab3
+  run_test country_num 360 locale country_num
+  run_test country_name Indonesia locale country_name
+  run_test country_car RI locale country_car
+  run_test lang_name English locale lang_name
+  run_test lang_ab en locale lang_ab
+  run_test lang_term eng locale lang_term
+  run_test lang_lib eng locale lang_lib
+  run_test postal_fmt '%f%N%a%N%d%N%b%N%s %h %e %r%N%z %T%N%c%N' locale postal_fmt
+}
+
+test_name() {
+  heading LC_NAME
+  run_test name_fmt '%d%t%g%t%m%t%f' locale name_fmt
+}
+
+test_measurement() {
+  heading LC_MEASUREMENT
+  # 1 is metric
+  run_test measurement 1 locale measurement
+}
+
+test_ctype() {
+  heading LC_CTYPE
+  run_test charmap UTF-8 locale charmap
+  run_test 'UTF-8 letter class' 1 grep -c '[[:alpha:]]' <<<'é'
+}
+
+test_collate() {
+  heading LC_COLLATE
+  run_test 'collation order' $'a\nA\nb\nB' sort <<<$'B\nb\nA\na'
+}
+
+run_category() {
+  case $1 in
+    LC_MONETARY)    test_monetary ;;
+    LC_NUMERIC)     test_numeric ;;
+    LC_TIME)        test_time ;;
+    LC_TIME_EXT)    test_time_extended ;;
+    LC_MESSAGES)    test_messages ;;
+    LC_PAPER)       test_paper ;;
+    LC_TELEPHONE)   test_telephone ;;
+    LC_ADDRESS)     test_address ;;
+    LC_NAME)        test_name ;;
     LC_MEASUREMENT) test_measurement ;;
-    all)
-      test_monetary
-      test_numeric
-      test_time
-      test_time_extended
-      test_messages
-      test_paper
-      test_telephone
-      test_address
-      test_name
-      test_measurement
-      ;;
-    *)
-      echo "Unknown category: $category"
-      echo "Usage: $0 [category|all]"
-      echo "Categories: LC_MONETARY, LC_NUMERIC, LC_TIME, LC_TIME_EXT, LC_MESSAGES, LC_PAPER, LC_TELEPHONE, LC_ADDRESS, LC_NAME, LC_MEASUREMENT"
-      exit 1
-      ;;
+    LC_CTYPE)       test_ctype ;;
+    LC_COLLATE)     test_collate ;;
+    *)              die 22 "Unknown category ${1@Q}" ;;
   esac
-  
-  # Summary
-  echo -e "\n======================================"
-  echo "Test Summary:"
-  echo -e "Passed: ${GREEN}$TESTS_PASSED${NC}"
-  echo -e "Failed: ${RED}$TESTS_FAILED${NC}"
-  echo "======================================"
-  
-  [[ $TESTS_FAILED -eq 0 ]] && exit 0 || exit 1
+}
+
+main() {
+  local -- category=${1:-all} all
+
+  [[ " ${CATEGORIES[*]} all " == *" $category "* ]] \
+    || die 22 "Unknown category ${category@Q}" \
+              "Usage: $SCRIPT_NAME [CATEGORY|all]" \
+              "Categories: ${CATEGORIES[*]}"
+
+  if ((TEST_INSTALLED)); then
+    all=$(locale -a) || die 1 'locale -a failed, so installation cannot be checked'
+    [[ $all == *en_ID* ]] || die 3 'en_ID is not installed on this system'
+    printf 'Testing installed locale en_ID.UTF-8\n'
+  else
+    [[ -d $BUILD_DIR/en_ID.UTF-8 ]] || die 3 "No build in ${BUILD_DIR@Q}; run 'make compile'"
+    LOCALE_ENV+=(LOCPATH="$BUILD_DIR")
+    printf 'Testing build %s\n' "$BUILD_DIR/en_ID.UTF-8"
+  fi
+
+  if [[ $category == all ]]; then
+    for category in "${CATEGORIES[@]}"; do run_category "$category"; done
+  else
+    run_category "$category"
+  fi
+
+  printf '\nPassed: %s%d%s\n' "$GREEN" "$TESTS_PASSED" "$NC"
+  printf 'Failed: %s%d%s\n' "$RED" "$TESTS_FAILED" "$NC"
+  ((TESTS_FAILED == 0)) || exit 1
 }
 
 main "$@"

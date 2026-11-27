@@ -1,206 +1,137 @@
 #!/usr/bin/env bash
-# Script to install en_ID locale and automatically set it as system default
-# For Ubuntu Desktop and Server
-# Fully automated installation with persistence
+# Install the en_ID locale and make it the system default.
+# For Ubuntu and Debian.
 set -euo pipefail
 shopt -s inherit_errexit
-
-# Script metadata
-# shellcheck disable=SC2155
-declare -r SCRIPT_PATH=$(realpath -- "$0")
-# shellcheck disable=SC2034 # SCRIPT_DIR reserved per BCS0103
-declare -r SCRIPT_DIR=${SCRIPT_PATH%/*} SCRIPT_NAME=${SCRIPT_PATH##*/}
-# shellcheck disable=SC2034 # VERSION reserved per BCS0103
-declare -r VERSION=2.1.0
-
-# Secure PATH for privileged execution
 declare -rx PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# Repository URL (can be overridden by environment variable)
+# Named literally: piped into bash, as documented, $0 is "bash"
+declare -r SCRIPT_NAME=install-ubuntu.sh VERSION=2.3.1
 declare -r REPO_URL=${EN_ID_REPO_URL:-https://github.com/Open-Technology-Foundation/en_ID.git}
-[[ $REPO_URL =~ ^https?:// ]] || { >&2 echo "Invalid repository URL ${REPO_URL@Q}"; exit 22; }
+# update-locale writes here (on newer releases, a symlink to /etc/locale.conf)
+declare -r DEFAULT_LOCALE=/etc/default/locale ENVIRONMENT=/etc/environment
 
-# Colors for output (CYAN included per BCS0706 minimal set)
+declare -i VERBOSE=1
+declare -- TEMP_DIR=''
+
 if [[ -t 1 && -t 2 ]]; then
-  # shellcheck disable=SC2034 # CYAN reserved per BCS0706
   declare -r RED=$'\033[0;31m' GREEN=$'\033[0;32m' YELLOW=$'\033[0;33m' CYAN=$'\033[0;36m' NC=$'\033[0m'
 else
-  # shellcheck disable=SC2034
   declare -r RED='' GREEN='' YELLOW='' CYAN='' NC=''
 fi
 
-# Global variables
-declare -- CNF_HOOK=''
-declare -- TEMP_DIR=''
-declare -r APT_HOOK_FILE=/etc/apt/apt.conf.d/99en-id-locale-gen
-declare -i SSH_CONFIG_UPDATED=0
-declare -i VERBOSE=1
-
-# --- Messaging functions ---
-
+# Message functions
 _msg() {
   local -- prefix="$SCRIPT_NAME:" msg
   case ${FUNCNAME[1]} in
-    warn)  prefix+=" $YELLOW▲$NC" ;;
-    info)  prefix+=" $CYAN◉$NC" ;;
-    error) prefix+=" $RED✗$NC" ;;
-    *)     ;;
+    info)    prefix+=" $CYAN◉$NC" ;;
+    warn)    prefix+=" $YELLOW▲$NC" ;;
+    success) prefix+=" $GREEN✓$NC" ;;
+    error)   prefix+=" $RED✗$NC" ;;
+    *)       ;;
   esac
-  (($#)) || { >&2 echo; return 0; }
   for msg in "$@"; do >&2 printf '%s %s\n' "$prefix" "$msg"; done
 }
-info()  { ((VERBOSE)) || return 0; _msg "$@"; }
-warn()  { _msg "$@"; }
-error() { _msg "$@"; }
-die() { (($# < 2)) || error "${@:2}"; exit "${1:-0}"; }
+info()    { ((VERBOSE)) || return 0; _msg "$@"; }
+warn()    { _msg "$@"; }
+success() { ((VERBOSE)) || return 0; _msg "$@"; }
+error()   { _msg "$@"; }
+die()     { (($# < 2)) || error "${@:2}"; exit "${1:-0}"; }
 
-# --- Cleanup ---
-
-# shellcheck disable=SC2317 # invoked via trap
+# Cleanup on exit
+# shellcheck disable=SC2317,SC2329 # invoked via trap
 cleanup() {
   local -i exitcode=${1:-$?}
-  trap - SIGINT SIGTERM EXIT
-  # Restore APT hook if we disabled it
-  if [[ -n $CNF_HOOK && -f "$CNF_HOOK".disabled ]]; then
-    mv -- "$CNF_HOOK".disabled "$CNF_HOOK" ||:
-  fi
-  # Remove temp directory
-  if [[ -n $TEMP_DIR ]]; then
-    rm -rf "$TEMP_DIR" ||:
-  fi
+  trap - EXIT
+  [[ -z $TEMP_DIR ]] || rm -rf -- "$TEMP_DIR"
   exit "$exitcode"
 }
-trap 'cleanup $?' SIGINT SIGTERM EXIT
+trap 'cleanup $?' EXIT
 
-# --- Execution ---
+# Installation functions
+install_packages() {
+  info 'Installing required packages'
+  # A stale or broken third-party source must not block the install
+  apt-get update -qq \
+    || warn 'apt-get update reported errors; continuing with the existing package lists'
+  apt-get install -y -qq git make locales || die 18 'Failed to install: git make locales'
+}
 
-# Check if running as root
-if ((EUID)); then
-  die 1 'This script must be run as root or with sudo'
-fi
+# Clones the release matching this installer, then installs the locale and
+# makes it survive package updates.
+install_locale() {
+  TEMP_DIR=$(mktemp -d) || die 5 'Failed to create a temporary directory'
+  info "Downloading en_ID v$VERSION"
+  timeout 300 git clone --quiet --depth 1 --branch "v$VERSION" -- "$REPO_URL" "$TEMP_DIR"/en_ID \
+    || die 1 "Failed to download en_ID v$VERSION from ${REPO_URL@Q}"
+  make -C "$TEMP_DIR"/en_ID install-persistent || die 1 'Installation failed'
+}
 
-info "${GREEN}Installing en_ID locale as system default...$NC"
-
-# Update package lists
-info 'Updating package lists...'
-# Disable cnf-update-db APT hook temporarily — it can cause apt-get update failures
-for conf in /etc/apt/apt.conf.d/*; do
-  [[ -f $conf ]] || continue
-  if grep -q 'cnf-update-db' "$conf" 2>/dev/null; then
-    CNF_HOOK=$conf
-    break
+# Keeps the first backup, which holds the settings from before en_ID.
+backup_settings() {
+  local -- file=$1
+  if [[ -f $file.backup ]]; then
+    info "Existing backup $file.backup preserved"
+  elif [[ -f $file ]]; then
+    cp -- "$file" "$file".backup || die 5 "Failed to back up ${file@Q}"
+    info "Backed up current locale settings to $file.backup"
   fi
-done
-if [[ -n $CNF_HOOK ]]; then
-  mv -- "$CNF_HOOK" "$CNF_HOOK".disabled || die 1 "Failed to disable APT hook ${CNF_HOOK@Q}"
-  apt-get update -qq || die 1 'apt-get update failed'
-  mv -- "$CNF_HOOK".disabled "$CNF_HOOK" || die 1 "Failed to restore APT hook ${CNF_HOOK@Q}"
-else
-  apt-get update -qq || die 1 'apt-get update failed'
-fi
+}
 
-# Install required packages
-info 'Installing required packages...'
-apt-get install -y -qq git make locales || die 18 'Failed to install: git make locales'
+# Releases up to 2.2.1 wrote twelve LC_* lines, and up to 2.1.0 LC_ALL as well.
+# LANG alone sets the default.
+strip_legacy_lc() {
+  local -- file
+  for file in "$@"; do
+    [[ -f $file ]] || continue
+    sed -i --follow-symlinks -E '/^LC_[A-Z]+="?en_ID\.UTF-8"?$/d' -- "$file" \
+      || die 5 "Failed to update ${file@Q}"
+  done
+}
 
-# Clone the repository to temp directory
-TEMP_DIR=$(mktemp -d)
-info 'Downloading en_ID locale...'
-if ! git clone --quiet "$REPO_URL" "$TEMP_DIR"/en_ID; then
-  die 1 'Failed to download en_ID repository'
-fi
+# A last line without a newline would merge with an appended one.
+end_with_newline() {
+  local -- file=$1
+  [[ -s $file && -n $(tail -c 1 -- "$file") ]] || return 0
+  printf '\n' >> "$file" || die 5 "Failed to write ${file@Q}"
+}
 
-# Change to repo directory
-cd "$TEMP_DIR"/en_ID || die 1 'Failed to enter repo directory'
+set_default_lang() {
+  update-locale LANG=en_ID.UTF-8 || die 1 'update-locale failed'
+}
 
-# Install the locale
-info 'Installing locale files...'
-make install || die 1 'make install failed'
-
-# Verify installation
-if ! locale -a | grep -q 'en_ID'; then
-  die 1 'Failed to install en_ID locale'
-fi
-
-info "${GREEN}en_ID locale installed successfully$NC"
-
-# Backup current locale settings
-if [[ -f /etc/default/locale ]]; then
-  cp /etc/default/locale /etc/default/locale.backup || die 5 'Failed to backup locale settings'
-  info 'Backed up current locale settings to /etc/default/locale.backup'
-fi
-
-# Set en_ID as default locale
-info 'Setting en_ID as default locale...'
-update-locale LANG=en_ID.UTF-8 \
-              LC_ALL=en_ID.UTF-8 \
-              LC_CTYPE=en_ID.UTF-8 \
-              LC_NUMERIC=en_ID.UTF-8 \
-              LC_TIME=en_ID.UTF-8 \
-              LC_COLLATE=en_ID.UTF-8 \
-              LC_MONETARY=en_ID.UTF-8 \
-              LC_MESSAGES=en_ID.UTF-8 \
-              LC_PAPER=en_ID.UTF-8 \
-              LC_NAME=en_ID.UTF-8 \
-              LC_ADDRESS=en_ID.UTF-8 \
-              LC_TELEPHONE=en_ID.UTF-8 \
-              LC_MEASUREMENT=en_ID.UTF-8 \
-              LC_IDENTIFICATION=en_ID.UTF-8 \
-  || die 1 'update-locale failed'
-
-# Also set locale in /etc/environment for apps that don't read /etc/default/locale
-grep -q 'LANG=en_ID.UTF-8' /etc/environment \
-  || echo 'LANG=en_ID.UTF-8' >> /etc/environment \
-  || die 5 'Failed to write /etc/environment'
-grep -q 'LC_ALL=en_ID.UTF-8' /etc/environment \
-  || echo 'LC_ALL=en_ID.UTF-8' >> /etc/environment \
-  || die 5 'Failed to write /etc/environment'
-
-# Add to locale.gen for persistence across system updates
-if [[ -f /etc/locale.gen ]]; then
-  if ! grep -q '^en_ID.UTF-8' /etc/locale.gen; then
-    echo 'en_ID.UTF-8 UTF-8' >> /etc/locale.gen || die 5 'Failed to write /etc/locale.gen'
-    info 'Added en_ID to /etc/locale.gen for persistence'
+# For programs that read /etc/environment rather than the locale settings
+set_environment_lang() {
+  if [[ -f $ENVIRONMENT ]] && grep -qxF -- 'LANG=en_ID.UTF-8' "$ENVIRONMENT"; then
+    return 0
   fi
-fi
+  end_with_newline "$ENVIRONMENT"
+  printf 'LANG=en_ID.UTF-8\n' >> "$ENVIRONMENT" || die 5 "Failed to write ${ENVIRONMENT@Q}"
+}
 
-# Create APT hook to regenerate locale after package updates
-if [[ ! -f $APT_HOOK_FILE ]]; then
-  cat > "$APT_HOOK_FILE" << 'EOF'
-// Automatically regenerate en_ID locale after package updates
-DPkg::Post-Invoke { "if [ -f /etc/locale.gen ] && grep -q '^en_ID.UTF-8' /etc/locale.gen; then locale-gen en_ID.UTF-8 2>/dev/null || true; fi"; };
-EOF
-  info 'Created APT hook to maintain en_ID locale after system updates'
-fi
+main() {
+  local -- sample
 
-# Enable locale forwarding in SSH if not already configured
-if [[ -f /etc/ssh/sshd_config ]]; then
-  if ! grep -q '^AcceptEnv.*LC_\*' /etc/ssh/sshd_config; then
-    echo 'AcceptEnv LANG LC_*' >> /etc/ssh/sshd_config || die 5 'Failed to write /etc/ssh/sshd_config'
-    SSH_CONFIG_UPDATED=1
-  fi
-fi
+  [[ $REPO_URL =~ ^(https://|file:///) ]] \
+    || die 22 "Invalid repository URL ${REPO_URL@Q}" \
+              'EN_ID_REPO_URL must start with https:// (or file:/// for a local clone)'
+  ((EUID == 0)) || die 13 'This script must be run as root or with sudo'
 
-info "${GREEN}Installation complete!$NC"
-info
-info 'Current locale settings:'
->&2 locale
+  info "Installing en_ID v$VERSION as the system default locale"
+  install_packages
+  install_locale
+  backup_settings "$DEFAULT_LOCALE"
+  strip_legacy_lc "$DEFAULT_LOCALE" "$ENVIRONMENT"
+  set_default_lang
+  set_environment_lang
 
-info
-warn 'IMPORTANT: You need to log out and log back in for the changes to take full effect.'
-warn 'For SSH sessions, reconnect to apply the new locale.'
+  success 'Installation complete: en_ID is the system default locale'
+  warn 'Log out and back in, or reconnect over SSH, for the new default to take effect'
+  # date, not printf's %()T: glibc never looks again for a locale archive that
+  # was missing when this shell first looked, and on a new system this run created it
+  sample=$(LC_ALL=en_ID.UTF-8 date +'%x = %A, %d %B %Y') || sample='unavailable'
+  info "Date format sample: $sample"
+}
 
-if ((SSH_CONFIG_UPDATED)); then
-  info
-  warn 'NOTE: SSH configuration was updated to accept locale environment variables.'
-  warn '      You should restart the SSH service when convenient:'
-  warn '      sudo systemctl restart ssh'
-fi
-
-# Test the locale
-info
-info 'Testing locale (date format):'
->&2 LC_ALL=en_ID.UTF-8 date +'%x = %A, %d %B %Y'
-
-exit 0
+main "$@"
 #fin

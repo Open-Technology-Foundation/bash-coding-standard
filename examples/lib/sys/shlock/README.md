@@ -29,7 +29,7 @@ A robust, production-ready file-based locking utility using `flock(1)` for safe 
 - **Lock Stealing**: Administrative override to break held or abandoned locks (`--steal`)
 - **Safe for Automation**: Ideal for cron jobs, systemd services, and CI/CD pipelines
 - **Comprehensive Error Messages**: Clear, actionable error reporting
-- **Battle-tested**: 136 comprehensive test cases
+- **Battle-tested**: 153 comprehensive test cases
 
 ## Installation
 
@@ -158,7 +158,7 @@ brew install pandoc
 
 Bash completion is automatically installed with `make install` or `./install.sh install`. It provides intelligent tab-completion for:
 
-- **Options**: `-m`, `-w`, `-t`, `-s`, `--max-age`, `--wait`, `--timeout`, `--steal`, `--help`, `--version`
+- **Options**: `-m`, `-w`, `-t`, `-s`, `-h`, `-V`, `--max-age`, `--wait`, `--timeout`, `--steal`, `--help`, `--version`
 - **Lock names**: Existing locks from `/run/lock/*.lock`
 - **Commands**: After `--`, completes available commands and files
 
@@ -250,7 +250,7 @@ shlock [OPTIONS] [LOCKNAME] -- COMMAND [ARGS...]
 | 1 | Lock held (non-timeout acquisition failure) or steal cancelled by user |
 | 2 | Usage error (missing `COMMAND` or `--` separator) |
 | 5 | I/O error (lock acquired but PID file write failed — post-acquisition disk/fs failure) |
-| 13 | Permission denied (no writable lock directory) |
+| 13 | Permission denied (no writable lock directory, or lock file cannot be opened) |
 | 22 | Invalid argument (unknown option, bad `LOCKNAME`, non-numeric value) |
 | 24 | Timeout (`--timeout N` expired) |
 | *other* | Propagated from the wrapped command (standard Unix-wrapper convention, matches `nice(1)`, `timeout(1)`, `sudo(1)`, `env(1)`) |
@@ -307,12 +307,15 @@ shlock --timeout 10 healthcheck -- curl -f http://localhost/health
 Break held or abandoned locks:
 
 ```bash
-# Steal lock from dead process (automatic, no prompt)
+# Steal an abandoned lock: no process holds it (automatic, no prompt)
 shlock --steal backup -- /usr/local/bin/backup.sh
 
-# Steal lock from running process (prompts for confirmation)
+# Steal a lock a live process holds (prompts for confirmation, even when the
+# holder's PID file is missing or stale)
 shlock --steal deployment -- ./deploy.sh production
 ```
+
+Without a terminal (cron, systemd) the confirmation prompt reads end-of-file and declines, so `--steal` breaks a held lock only when a person confirms; abandoned locks are still cleared unattended.
 
 ### Cron Job Usage
 
@@ -366,7 +369,7 @@ else
         1)  echo "Lock is held by another process" ;;
         2)  echo "Usage error (missing COMMAND or -- separator)" ;;
         5)  echo "I/O error: PID file write failed after lock was acquired" ;;
-        13) echo "Permission denied: no writable lock directory" ;;
+        13) echo "Permission denied: lock directory or lock file not writable" ;;
         22) echo "Invalid argument" ;;
         24) echo "Timeout waiting for lock" ;;
         *)  echo "Maintenance script exited with code $exit_code" ;;
@@ -386,12 +389,12 @@ fi
    - Falls back to `/tmp/locks` (created if needed)
    - Fails if no directory is writable
 3. **Lock File Path**: Constructs path `<LOCK_DIR>/<LOCKNAME>.lock`
-4. **Stale Lock Check**: If the lock file exists, cleans it up when either (a) older than `--max-age` with dead holder, or (b) within `--max-age` but holder process is dead. Refuses if an over-age lock is held by a running process (see [Stale Lock Detection](#stale-lock-detection))
-5. **Lock Stealing** (optional): If `--steal` is specified, removes existing lock (auto-cleans dead-process locks, prompts for running processes)
+4. **Lock Stealing** (optional): If `--steal` is specified, removes an existing lock first (auto-cleans locks no process holds, prompts when the holder is alive)
+5. **Stale Lock Check**: If the lock file exists, cleans it up when either (a) older than `--max-age` with dead holder, or (b) within `--max-age` but holder process is dead. Refuses if an over-age lock's holder is alive (see [Stale Lock Detection](#stale-lock-detection))
 6. **Lock Acquisition**: Uses `flock(1)` for atomic, kernel-level locking
 7. **PID Tracking**: Writes the script's PID to `<LOCK_DIR>/<LOCKNAME>.pid`
 8. **Command Execution**: Runs the specified command while holding the lock
-9. **Cleanup**: Automatically removes PID file on exit; lock file persists for reuse
+9. **Cleanup**: On exit, removes the PID file only if it still records this process (a failed contender never deletes the holder's); lock file persists for reuse
 
 ### File Locations
 
@@ -407,15 +410,17 @@ File patterns:
 
 ### Stale Lock Detection
 
-Before attempting to acquire the lock, shlock examines the existing lock file and applies one of two cleanup paths:
+Before attempting to acquire the lock, shlock examines the existing lock file and applies one of two cleanup paths. The holder counts as **alive** if the PID in the PID file is running, or if a non-blocking `flock` probe finds the lock held: the PID file can be missing, unreadable or stale while its holder still runs, so shlock never removes a lock on the PID file's word alone.
 
 1. **Age-based (`--max-age` exceeded)** — If the lock file mtime is older than `--max-age` hours (default: 24):
-   - If the PID in the PID file is **dead** → lock is removed (stale, cleaned).
-   - If the PID is **still running** → lock acquisition fails with error code 1 (long-running process, not stale).
+   - If the holder is **dead** → lock is removed (stale, cleaned).
+   - If the holder is **alive** → lock acquisition fails with error code 1 (long-running process, not stale).
 
-2. **Holder-based (within `--max-age`)** — If the lock file is younger than `--max-age` but the PID file holder is no longer running, the lock is reclaimed automatically with a warning. This covers crashes where the process died before releasing the lock.
+2. **Holder-based (within `--max-age`)** — If the lock file is younger than `--max-age`, the PID file holder is no longer running and no process holds the lock, the lock is reclaimed automatically with a warning. This covers crashes where the process died before releasing the lock. If the lock is still held (the PID file is stale), nothing is removed: shlock reports the lock as held, or waits for it with `--wait` / `--timeout`.
 
-Both paths leave an existing running holder's lock untouched.
+Both paths leave a live holder's lock untouched.
+
+The lock is held through a file descriptor (fd 200) that the wrapped command inherits, as with `flock(1)`. If shlock itself is killed (`kill -9`) while its command keeps running, or the command leaves a background process holding the descriptor, the lock stays held until those processes exit: later runs report it as held, past `--max-age` too, instead of starting alongside them. Close fd 200 (`200>&-`) in background processes that should not keep the lock.
 
 ### Waiting Modes
 
@@ -486,7 +491,7 @@ shlock --steal backup -- /usr/local/bin/backup.sh
 
 ## Testing
 
-The utility includes a comprehensive test suite with 136 test cases covering all functionality.
+The utility includes a comprehensive test suite with 153 test cases covering all functionality.
 
 ### Running Tests
 
@@ -505,9 +510,9 @@ cd /ai/scripts/lib/shlock/tests
 - **test_basic.sh** (21 tests): Basic functionality, argument handling, exit codes, short option bundling, wrapped command propagation
 - **test_concurrent.sh** (13 tests): Concurrent lock acquisition, race conditions
 - **test_edge_cases.sh** (26 tests): Edge cases, stress tests, special characters
-- **test_errors.sh** (38 tests): Error handling, invalid inputs, signal handling, LOCKNAME sanitization
-- **test_stale_locks.sh** (11 tests): Stale lock detection, max-age thresholds
-- **test_steal.sh** (12 tests): Lock stealing, dead/running process handling, steal combinations
+- **test_errors.sh** (45 tests): Error handling, invalid inputs, signal handling, LOCKNAME sanitization, post-acquisition PID-file I/O failure, unopenable lock file, unreadable PID file, leading-zero numeric options
+- **test_stale_locks.sh** (14 tests): Stale lock detection, max-age thresholds, live-holder refusal after a failed contender, live holder with a missing or stale PID file
+- **test_steal.sh** (19 tests): Lock stealing, dead/running process handling, steal combinations, PID-file ownership on contention and steal, live holder with a missing or stale PID file
 - **test_wait_timeout.sh** (15 tests): Blocking mode, timeout behavior, queuing
 
 ## Troubleshooting
@@ -758,6 +763,20 @@ This utility is part of the Okusi Group bash scripting standard library.
 
 ## Changelog
 
+### v2.0.2 (2026-11-27)
+
+Bug-fix release.
+
+- **Mutual-exclusion fix** — a contender that failed to acquire the lock deleted the running holder's PID file (the EXIT trap is armed before `flock` and removed the file unconditionally). With the PID gone, `--steal` took the holder for dead and stole without prompting, and once the lock passed `--max-age` the next run removed it, so two holders ran at once. `cleanup()` now removes the PID file only if it records the exiting process, which also stops a stolen-from holder deleting the new holder's PID file on exit.
+- **Exit code 13 extended** — failure to open the lock file (e.g. another user's lock file in `/run/lock`) now exits 13 with a message naming the file. It previously fell through `set -e` as exit 1, indistinguishable from "lock held".
+- **Leading-zero numbers** — `-m 08` / `-t 09` aborted with an octal error (exit 1); `-t 010` meant 8 seconds. Numeric options are now always decimal.
+- **Live holder with a missing, unreadable or stale PID file** — `--steal`, the age-stale cleanup and the dead-holder reclaim judged liveness from the PID file alone. A holder whose PID file was missing or named a dead process had its lock removed — by `--steal` without a prompt — and a second process acquired it. Every removal now also probes the lock with `flock -n`: a held lock makes `--steal` prompt, makes the age-stale check refuse (exit 1), and is left to `flock` in the fresh case (reported as held, or waited for). This covers a wrapper killed with `kill -9` whose command is still running: its lock now stays held until the command exits, where it used to be reclaimed and a second instance started beside it. Unattended, `--steal` no longer breaks such a lock (the prompt declines without a terminal).
+- **Unreadable PID file** — `read_holder_pid` used `$(<file)`; on bash 5.2 a failed `$(<file)` aborts under `set -e` even before `||`, so an unreadable PID file, or one deleted between the size test and the read, killed shlock with a raw bash error. It now reads with `read` and reports the PID as unknown.
+- **Held-lock message** names the holder PID only if that process is running; a stale PID file no longer names a dead process as the holder.
+- **BCS hardening** — `--` before pathname operands of `mkdir`, `chmod`, `stat` (BCS1005); the "Expected -- after LOCKNAME" usage error now quotes the offending argument; parsed settings are readonly once validated; suppressed errors carry their reason.
+- **Tests** — +13 assertions (PID-file ownership, steal and stale paths after a failed contender, unopenable lock file, leading zeros, live holder with a missing or stale PID file under `--steal` and the stale checks, unreadable PID file); documented `test_steal.sh` count corrected (it already had 14, not 12); bwrap exit-13 test now skips when bwrap cannot create a sandbox (`kernel.apparmor_restrict_unprivileged_userns=1`); suite runs 153 cases.
+- **Test suite BCS cleanup** — all seven suites and `run_tests.sh`: `PATH` hardened; no `set +e` (statuses captured with `|| rc=$?`); every background job reaped with its expected exit status checked instead of `wait … || true`, concurrent jobs reaped together (`reap_all`) so one failure cannot hide another's status; mtime backdating aborts the suite on failure instead of silently testing a fresh lock; scratch files in a per-suite `mktemp -d` directory instead of predictable `/tmp/…_$$` paths; `[[ -f ]]` instead of `test -f`; `--` before pathname operands; fixture setup guarded by a `setup_failed` helper that names the failing line; `assert_duration` checks the exit code as well as the elapsed time; PID files read with `read` in one checked step (a vanishing file no longer aborts a suite); runner declares its loop variables and sends all its own output, summary included, to stderr (stdout carries only the suites' output); shellcheck clean.
+
 ### v2.0.1 (2026-04-23)
 
 Bug-fix and hardening release. No CLI or exit-code changes for successful paths.
@@ -766,7 +785,7 @@ Bug-fix and hardening release. No CLI or exit-code changes for successful paths.
 - **Trap ordering fix** — `trap cleanup EXIT` is now installed immediately after opening fd 200, not after `flock` succeeds. An abort between those two steps still runs cleanup.
 - **Stale-lock reclaim** — locks younger than `--max-age` but held by a dead PID are now reclaimed automatically with a warning (previously left to age-out).
 - **Installation** — `COMPDIR` default now tiers by `PREFIX`: system installs (`/usr`, `/usr/local`) place completion at `/etc/bash_completion.d/shlock`; user/custom prefixes place it at `$PREFIX/share/bash-completion/completions/shlock`. Overridable via `make COMPDIR=…` or `COMPDIR=… ./install.sh`.
-- **Tests** — +9 assertions for edge coverage; suite runs 136 cases.
+- **Tests** — +9 assertions for edge coverage; +2 assertions for exit-code-5 (post-acquisition PID-file I/O failure); suite runs 138 cases.
 - **Help output** — minor formatting alignment (BCS0704).
 
 ### v2.0.0 (2026-04-19) — Breaking Change
@@ -798,6 +817,6 @@ See `git log`.
 
 ---
 
-**Version**: 2.0.1
-**Last Updated**: 2026-04-23
+**Version**: 2.0.2
+**Last Updated**: 2026-11-27
 **Maintainer**: Gary Dean (Biksu Okusi)

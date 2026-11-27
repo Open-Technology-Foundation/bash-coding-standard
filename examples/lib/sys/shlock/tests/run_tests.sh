@@ -5,13 +5,10 @@
 
 set -euo pipefail
 shopt -s inherit_errexit
-
-# Script metadata
-SCRIPT_NAME=${0##*/}
-readonly -- SCRIPT_NAME
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
 # Directories
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly -- SCRIPT_DIR
 readonly -- LOCK_SCRIPT="$SCRIPT_DIR/../shlock"
 
@@ -28,10 +25,10 @@ readonly -- COLOR_YELLOW='\033[1;33m'
 readonly -- COLOR_RESET='\033[0m'
 
 # Messaging functions
-info() { echo -e "${COLOR_GREEN}◉${COLOR_RESET} $*"; }
-error() { echo -e "${COLOR_RED}✗${COLOR_RESET} $*"; }
-warn() { echo -e "${COLOR_YELLOW}▲${COLOR_RESET} $*"; }
-success() { echo -e "${COLOR_GREEN}✓${COLOR_RESET} $*"; }
+info() { >&2 echo -e "${COLOR_GREEN}◉${COLOR_RESET} $*"; }
+error() { >&2 echo -e "${COLOR_RED}✗${COLOR_RESET} $*"; }
+warn() { >&2 echo -e "${COLOR_YELLOW}▲${COLOR_RESET} $*"; }
+success() { >&2 echo -e "${COLOR_GREEN}✓${COLOR_RESET} $*"; }
 
 # Verify shlock exists
 if [[ ! -x "$LOCK_SCRIPT" ]]; then
@@ -47,31 +44,32 @@ run_test_file() {
 
   info "Running: $test_name"
 
-  if bash "$test_file"; then
-    ((++TESTS_PASSED))
+  if bash -- "$test_file"; then
+    TESTS_PASSED+=1
     success "$test_name passed"
   else
-    ((++TESTS_FAILED))
+    TESTS_FAILED+=1
     FAILED_TESTS+=("$test_name")
     error "$test_name failed"
   fi
 
-  ((++TESTS_RUN))
+  TESTS_RUN+=1
 }
 
 # Main
 main() {
   info "Starting lock.sh test suite"
   info "Lock script: $LOCK_SCRIPT"
-  echo
+  >&2 echo
 
   # Find and run all test files
   local -a test_files=()
+  local -- file test_file test
   while IFS= read -r -d '' file; do
     test_files+=("$file")
   done < <(find "$SCRIPT_DIR" -maxdepth 1 -name 'test_*.sh' -type f -print0 | sort -z)
 
-  if [[ ${#test_files[@]} -eq 0 ]]; then
+  if ((${#test_files[@]} == 0)); then
     warn "No test files found"
     exit 1
   fi
@@ -79,27 +77,28 @@ main() {
   # Run each test file
   for test_file in "${test_files[@]}"; do
     run_test_file "$test_file"
-    echo
+    >&2 echo
   done
 
-  # Print summary
-  echo "================================================"
-  echo "Test Summary"
-  echo "================================================"
-  echo "Total tests:  $TESTS_RUN"
+  # Print summary (stderr, like every runner message: stdout carries only the
+  # suites' own output)
+  >&2 echo "================================================"
+  >&2 echo "Test Summary"
+  >&2 echo "================================================"
+  >&2 echo "Total tests:  $TESTS_RUN"
   success "Passed:       $TESTS_PASSED"
 
   if ((TESTS_FAILED > 0)); then
     error "Failed:       $TESTS_FAILED"
-    echo
+    >&2 echo
     error "Failed tests:"
     for test in "${FAILED_TESTS[@]}"; do
-      echo "  - $test"
+      >&2 echo "  - $test"
     done
     exit 1
   fi
 
-  echo
+  >&2 echo
   success "All tests passed!"
   exit 0
 }

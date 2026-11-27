@@ -37,9 +37,9 @@ trim() {
 [[ ${BASH_SOURCE[0]} == "$0" ]] || { declare -fx trim; return 0; }
 
 # --- command mode ---
+set -euo pipefail
 (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )) \
   || { >&2 echo "${0##*/}: requires Bash >= 4.4 (have ${BASH_VERSION:-unknown})"; exit 2; }
-set -euo pipefail
 shopt -s inherit_errexit shift_verbose extglob nullglob
 
 declare -rx PATH=/usr/local/bin:/usr/bin:/bin

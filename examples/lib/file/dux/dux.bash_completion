@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Bash completion for dux (dir-sizes)
 
 _dux() {
@@ -8,11 +8,11 @@ _dux() {
   prev="${COMP_WORDS[COMP_CWORD-1]}"
 
   # All available options
-  opts="-L -q --quiet -h --help -V --version"
+  opts="-L -x --one-file-system -q --quiet -h --help -V --version"
 
   # If previous word is the command itself or an option that takes no argument
   case "$prev" in
-    dux|dir-sizes|-L|-q|--quiet|-h|--help|-V|--version)
+    dux|dir-sizes|-L|-x|--one-file-system|-q|--quiet|-h|--help|-V|--version)
       if [[ "$cur" == -* ]]; then
         # Complete with options
         mapfile -t COMPREPLY < <(compgen -W "$opts" -- "$cur")
@@ -28,8 +28,9 @@ _dux() {
   mapfile -t COMPREPLY < <(compgen -d -- "$cur")
 }
 
-# Register completion function for both names
-complete -F _dux dux
-complete -F _dux dir-sizes
+# Register completion function for both names. -o filenames makes readline
+# escape spaces in directory names and append '/' to completed directories.
+complete -o filenames -F _dux dux
+complete -o filenames -F _dux dir-sizes
 
 #fin

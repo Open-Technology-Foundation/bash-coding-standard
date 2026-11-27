@@ -3,55 +3,70 @@
 
 PREFIX  ?= /usr/local
 BINDIR  ?= $(PREFIX)/bin
+# /etc/bash_completion.d only for a system prefix; a custom PREFIX keeps its
+# completions under itself instead of writing to the host's /etc
+ifeq ($(filter /usr /usr/local,$(PREFIX)),)
+COMPDIR ?= $(PREFIX)/share/bash-completion/completions
+else
 COMPDIR ?= /etc/bash_completion.d
+endif
 DESTDIR ?=
 
 USER_PREFIX  ?= $(HOME)/.local
 USER_BINDIR  ?= $(USER_PREFIX)/bin
-USER_COMPDIR ?= $(HOME)/.local/share/bash-completion/completions
+USER_COMPDIR ?= $(USER_PREFIX)/share/bash-completion/completions
 
-.PHONY: all install install-user uninstall uninstall-user check help
+# This Makefile and its directory (trailing slash). Anchors source paths and
+# the recursive 'check' so 'make -f' works regardless of invoking CWD.
+makefile := $(abspath $(lastword $(MAKEFILE_LIST)))
+srcdir   := $(dir $(makefile))
+
+.PHONY: all install uninstall install-user uninstall-user check help
 
 all: help
 
 install:
 	install -d $(DESTDIR)$(BINDIR)
-	install -m 755 elapsed_time $(DESTDIR)$(BINDIR)/elapsed_time
+	install -m 755 $(srcdir)elapsed_time $(DESTDIR)$(BINDIR)/elapsed_time
+	@# Bash completion: a COMPDIR under PREFIX is ours to create; a system one is used only if present
+	@case "$(COMPDIR)" in "$(PREFIX)"/*) install -d $(DESTDIR)$(COMPDIR) ;; esac
 	@if [ -d $(DESTDIR)$(COMPDIR) ]; then \
-	  install -m 644 .bash_completion $(DESTDIR)$(COMPDIR)/elapsed_time; \
+	  install -m 644 $(srcdir).bash_completion $(DESTDIR)$(COMPDIR)/elapsed_time; \
 	fi
-	@if [ -z "$(DESTDIR)" ]; then $(MAKE) --no-print-directory check; fi
+	@if [ -z "$(DESTDIR)" ]; then $(MAKE) --no-print-directory -f $(makefile) check; fi
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/elapsed_time
 	rm -f $(DESTDIR)$(COMPDIR)/elapsed_time
 
 install-user:
-	install -d $(USER_BINDIR)
-	install -m 755 elapsed_time $(USER_BINDIR)/elapsed_time
-	@if [ -d $(USER_COMPDIR) ]; then \
-	  install -m 644 .bash_completion $(USER_COMPDIR)/elapsed_time; \
-	fi
+	install -d $(USER_BINDIR) $(USER_COMPDIR)
+	install -m 755 $(srcdir)elapsed_time $(USER_BINDIR)/elapsed_time
+	install -m 644 $(srcdir).bash_completion $(USER_COMPDIR)/elapsed_time
 
 uninstall-user:
 	rm -f $(USER_BINDIR)/elapsed_time
 	rm -f $(USER_COMPDIR)/elapsed_time
 
 check:
-	@command -v elapsed_time >/dev/null 2>&1 \
-	  && echo 'elapsed_time: OK' \
-	  || echo 'elapsed_time: NOT FOUND (check PATH)'
+	@command -v elapsed_time >/dev/null 2>&1 || { echo 'elapsed_time: NOT FOUND (check PATH)'; exit 1; }
+	@echo 'elapsed_time: OK'
 
 help:
-	@echo 'Usage: make [target]'
+	@echo 'Usage: make [target] [VAR=value ...]'
 	@echo ''
 	@echo 'Targets:'
-	@echo '  install        Install to $(PREFIX) (requires sudo)'
-	@echo '  install-user   Install to ~/.local/bin'
-	@echo '  uninstall      Remove system install'
-	@echo '  uninstall-user Remove user install'
-	@echo '  check          Verify installation'
-	@echo '  help           Show this message'
+	@echo '  install         Install to $(PREFIX) (requires sudo)'
+	@echo '  uninstall       Remove system install'
+	@echo '  install-user    Install to $(USER_PREFIX) (no sudo)'
+	@echo '  uninstall-user  Remove user install'
+	@echo '  check           Verify elapsed_time is on PATH'
+	@echo '  help            Show this message'
+	@echo ''
+	@echo 'Variables:'
+	@echo '  PREFIX=$(PREFIX)  BINDIR=$(BINDIR)'
+	@echo '  COMPDIR=$(COMPDIR)  DESTDIR=$(DESTDIR)'
+	@echo '  USER_PREFIX=$(USER_PREFIX)'
 	@echo ''
 	@echo 'Install from GitHub:'
 	@echo '  git clone https://github.com/Open-Technology-Foundation/elapsed_time.git'

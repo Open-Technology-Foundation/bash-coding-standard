@@ -73,10 +73,10 @@ real world data.
 
 ## Version:
 
-    1.0.0
+    1.1.0
 
 """
-__version__ = '1.0.1'
+__version__ = '1.1.0'
 import re
 import unicodedata
 
@@ -107,12 +107,13 @@ multi_char_replacements = {
   'â�¹': 'Rs',
   '�': '-',
   '€': 'EUR',  # Euro symbol - match iconv transliteration
+  '£': 'GBP',  # Pound sign - match iconv transliteration
   '©': 'C',    # Copyright symbol
   '®': 'R',    # Registered trademark
 }
 
 # Precompile regular expressions
-ps_html_entity_re = re.compile(r'&[^ \t]*;')
+ps_html_entity_re = re.compile(r'&[^ \t;]*;')  # an entity ends at the first ';'
 ps_non_alnum_re = re.compile(r'[^a-zA-Z0-9]+')
 ps_quotes_re = re.compile(r"[\"'`’´]")
 
@@ -161,10 +162,11 @@ def post_slug(input_str: str, sep_char: str = '-',
 
   Version:
   --------
-  1.0.1
+  1.1.0
   
   Changelog:
   ----------
+  1.1.0 - HTML entity match ends at the first ';'. '£' becomes 'GBP'.
   1.0.1 - Added 255 character input limit, standardized HTML entity handling,
           added error handling with try-except block.
   1.0.0 - Initial release

@@ -1,213 +1,74 @@
 #!/bin/bash
 # stopwords - Multilingual stopwords filter for text processing
-# Filters stopwords from input text in 33 languages using Bash associative arrays
+# Filters stopwords from input text in 32 languages using Bash associative arrays
 # Optimal for processing text < 2,000 words; for larger documents see:
 # https://github.com/Open-Technology-Foundation/stopwords (Python implementation)
 
-stopwords() {
-  # Script metadata
-  local -- VERSION='1.0.0'
-  local -- SCRIPT_NAME=${FUNCNAME[0]}
-  local -- DATADIR
+# Helpers live at top level under a private prefix: a function defined inside
+# stopwords() would become global on each call and, when this file is
+# sourced, replace a caller's own function of the same name (e.g. error)
 
-  # Find stopwords data using fallback chain
-  find_stopwords_data() {
-    local -a search_paths=(
-      "${NLTK_DATA:-}/corpora/stopwords"
-      "/usr/share/nltk_data/corpora/stopwords"
-      "/usr/share/stopwords"
-    )
-
-    local -- datadir
-    for datadir in "${search_paths[@]}"; do
-      [[ -z "$datadir" ]] && continue
-      if [[ -d "$datadir" ]]; then
-        echo "$datadir"
-        return 0
-      fi
-    done
-    return 1
-  }
-
-  DATADIR=$(find_stopwords_data) || {
-    error "Stopwords data not found"
-    error ""
-    error "Install options:"
-    error "  1. Install this package: sudo make install"
-    error "  2. Install Python NLTK: pip install nltk && python -m nltk.downloader stopwords"
-    error "  3. Set NLTK_DATA: export NLTK_DATA=/path/to/nltk_data"
-    return 1
-  }
-
-  # variables
-  local -- DEFAULT_LANGUAGE=english
-  local -- LANGUAGE="$DEFAULT_LANGUAGE"
-  local -i KEEP_PUNCTUATION=0
-  local -i LIST_WORDS=0
-  local -i COUNT_WORDS=0
-  local -- INPUT_TEXT=''
-
-  # Error message to stderr
-  error() {
-    local -- msg
-    for msg in "$@"; do
-      >&2 printf '%s: %s\n' "$SCRIPT_NAME" "$msg"
-    done
-  }
-
-  # Parse command-line arguments
-  while (($#)); do
-    case $1 in
-      -l|--language)
-        [[ -n ${2:-} ]] || { error "Missing argument for option ${1@Q}"; return 2; }
-        LANGUAGE=$2
-        shift
-        ;;
-      -p|--keep-punctuation)
-        KEEP_PUNCTUATION=1 ;;
-      -w|--list-words)
-        LIST_WORDS=1 ;;
-      -c|--count)
-        COUNT_WORDS=1 ;;
-      -V|--version)
-        echo "$SCRIPT_NAME $VERSION"; return 0 ;;
-      -h|--help)
-        if declare -F usage >/dev/null; then
-          usage
-        else
-          error 'No help in sourced script'
-        fi
-        return 0
-        ;;
-      -[lpwcVh]*) #shellcheck disable=SC2046  # Intentional word splitting for flag expansion
-        set -- '' $(printf -- "-%c " $(grep -o . <<<"${1:1}")) "${@:2}" ;;
-      -*)
-        error "Invalid option ${1@Q}"; return 22 ;;
-      *)
-        INPUT_TEXT+="$1 " ;;
-    esac
-    shift
+# Error message to stderr
+_stopwords_error() {
+  local -- msg
+  for msg in "$@"; do
+    >&2 printf 'stopwords: %s\n' "$msg"
   done
+}
 
-  # Validate language
-  local -- stopwords_file="$DATADIR"/"$LANGUAGE"
-  if [[ ! -f "$stopwords_file" ]]; then
-    error "Language ${LANGUAGE@Q} not supported." "Falling back to 'english'"
-    LANGUAGE=english
-    stopwords_file="$DATADIR"/"$LANGUAGE"
-    [[ -f "$stopwords_file" ]] || { error "Stopwords $DATADIR/$LANGUAGE not found!"; return 1; }
-  fi
+# Print the first of the given directories that exists
+_stopwords_first_dir() {
+  local -- dir
+  for dir in "$@"; do
+    if [[ -d $dir ]]; then
+      echo "$dir"
+      return 0
+    fi
+  done
+  return 1
+}
 
-  # Load stopwords into associative array
-  local -A stopwords
-  local -- word
-  while IFS= read -r word; do
-    # Store lowercase version for case-insensitive matching
-    stopwords["${word,,}"]=1
-  done < "$stopwords_file"
-
-  # Get input text
-  [[ -n "$INPUT_TEXT" ]] || INPUT_TEXT=$(</dev/stdin) # Read from stdin
-
-  # Exit early if input is empty
-  [[ -n "$INPUT_TEXT" ]] || return 0
-
-  # Convert to lowercase for processing
-  local -- lower_text="${INPUT_TEXT,,}"
-
-  # Tokenize and filter
-  local -a filtered_words=()
-  local -A word_counts=()
-
-  if ((KEEP_PUNCTUATION)); then
-    # Keep punctuation: split on whitespace only
-    # Replace multiple spaces/tabs/newlines with single space
-    while [[ "$lower_text" =~ [[:space:]][[:space:]] ]]; do
-      lower_text="${lower_text//[[:space:]][[:space:]]/ }"
-    done
-
-    # Split into words using explicit array parsing
-    local -a words
-    IFS=' ' read -ra words <<< "$lower_text"
-    for word in "${words[@]}"; do
-      # Check if word is not a stopword
-      if [[ ! -v stopwords["$word"] ]]; then
-        if ((COUNT_WORDS)); then
-          ((word_counts["$word"]+=1))
-        else
-          filtered_words+=("$word")
-        fi
-      fi
-    done
-  else
-    # Remove punctuation: replace punctuation with spaces, then split
-    # First, handle possessive 's by removing it
-    lower_text="${lower_text//\'s / }"
-
-    # Replace punctuation and special characters with spaces (optimized single tr call)
-    lower_text=$(tr '[:punct:]\n\t' ' ' <<< "$lower_text")
-
-    # Collapse multiple spaces
-    while [[ "$lower_text" =~ '  ' ]]; do
-      lower_text="${lower_text//  / }"
-    done
-
-    # Split into words using explicit array parsing
-    local -a words
-    IFS=' ' read -ra words <<< "$lower_text"
-    for word in "${words[@]}"; do
-      # Skip empty words
-      [[ -n "$word" ]] || continue
-
-      # Additional cleaning for special characters that might remain (combined)
-      word="${word//[\`\"_\'\']/}"
-
-      # Skip if word is now empty after cleaning
-      [[ -n "$word" ]] || continue
-
-      # Check if word is not a stopword
-      if [[ ! -v stopwords["$word"] ]]; then
-        if ((COUNT_WORDS)); then
-          ((word_counts["$word"]+=1))
-        else
-          filtered_words+=("$word")
-        fi
-      fi
-    done
-  fi
-
-  # Output results
-  if ((COUNT_WORDS)); then
-    # Output word frequency counts
-    for word in "${!word_counts[@]}"; do
-      printf '%d %s\n' "${word_counts[$word]}" "$word"
-    done | sort -k1,2 -n
-  elif ((LIST_WORDS)); then
-    # Output one word per line
-    printf '%s\n' "${filtered_words[@]}"
-  else
-    # Output as a single line with spaces
-    if ((${#filtered_words[@]})); then
-      echo "${filtered_words[*]}"
+# Print the stopwords data directory to use. The bundled data comes first:
+# beside this file (PREFIX/share/stopwords for an install under PREFIX,
+# stopwords_data/ for a checkout), then the system locations. NLTK data is
+# optional, used only when no bundled data is found. install.sh check asks
+# this function, so the two cannot disagree
+_stopwords_find_data() {
+  local -a paths=()
+  # Only a symlinked script needs resolving, so a link elsewhere still finds
+  # the data; any other path works as given (the kernel resolves .. and
+  # directory links), which spares a fork on every call. An exported copy in
+  # a child shell reports its source as 'environment' and has no file to
+  # resolve; it starts at the system locations
+  local -- src=${BASH_SOURCE[0]:-} script_dir=''
+  if [[ $src != environment && -f $src ]]; then
+    if [[ -L $src ]]; then
+      script_dir=$(realpath -e -- "$src" 2>/dev/null) && script_dir=${script_dir%/*}
+    elif [[ $src == */* ]]; then
+      script_dir=${src%/*}
+    else
+      script_dir=.
     fi
   fi
-
-  return 0
+  [[ -z $script_dir ]] \
+    || paths+=("$script_dir"/../share/stopwords "$script_dir"/stopwords_data)
+  paths+=(/usr/local/share/stopwords /usr/share/stopwords)
+  [[ -z ${NLTK_DATA:-} ]] || paths+=("$NLTK_DATA/corpora/stopwords")
+  paths+=(/usr/share/nltk_data/corpora/stopwords)
+  _stopwords_first_dir "${paths[@]}"
 }
-declare -fx stopwords
 
-[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
+# _stopwords_usage SCRIPT_NAME VERSION DATADIR
+_stopwords_usage() {
+  local -- script_name=$1 version=$2 datadir=$3
+  local -- f languages=''
+  for f in "$datadir"/*; do
+    [[ -f $f && ${f##*/} != README ]] || continue
+    languages+="${languages:+, }${f##*/}"
+  done
 
-# Remove stopwords from text
-set -euo pipefail
-shopt -s inherit_errexit shift_verbose extglob nullglob
-
-declare -g VERSION SCRIPT_PATH SCRIPT_NAME DATADIR
-
-# Show usage information
-usage() {
-  cat <<EOT
-$SCRIPT_NAME $VERSION - Remove stopwords from text
+  cat <<HELP
+$script_name $version - Remove stopwords from text
 
 Filters stopwords from input text based on the selected language.
 
@@ -216,7 +77,7 @@ Performance Note:
   For larger documents or performance-critical applications, consider the
   Python implementation: https://github.com/Open-Technology-Foundation/stopwords
 
-Usage: $SCRIPT_NAME [OPTIONS] [TEXT]
+Usage: $script_name [OPTIONS] [TEXT]
 
 Arguments:
   TEXT                   The input text. If not provided, read from stdin.
@@ -230,31 +91,176 @@ Options:
   -h|--help              Show this help message
 
 Available languages:
-  $(for f in "$DATADIR"/*; do [[ -f "$f" ]] && basename "$f"; done | tr '\n' ',' | sed 's/,/, /g' | sed 's/, $//')
+  $languages
 
 Examples:
   # Filter stopwords from text
-  $SCRIPT_NAME 'the quick brown fox jumps over the lazy dog'
+  $script_name 'the quick brown fox jumps over the lazy dog'
 
   # Read from stdin
-  echo 'the quick brown fox' | $SCRIPT_NAME
+  echo 'the quick brown fox' | $script_name
 
   # Use Spanish stopwords
-  $SCRIPT_NAME -l spanish 'el rápido zorro marrón'
+  $script_name -l spanish 'el rápido zorro marrón'
 
-  # User Indonesian stopwords
-  $SCRIPT_NAME -l indonesian 'Pohon mangga tumbuh di halaman rumah.'
+  # Use Indonesian stopwords
+  $script_name -l indonesian 'Pohon mangga tumbuh di halaman rumah.'
 
   # Keep punctuation
-  $SCRIPT_NAME -p 'Hello, world!'
+  $script_name -p 'Hello, world!'
 
   # Output as list
-  $SCRIPT_NAME -w 'How vexingly quick daft zebras jump!'
+  $script_name -w 'How vexingly quick daft zebras jump!'
 
   # Word frequency count from file
-  $SCRIPT_NAME -c < README.md
-EOT
+  $script_name -c < README.md
+HELP
 }
+
+stopwords() {
+  local -- version='1.2.0'
+  local -- script_name=${FUNCNAME[0]}
+  local -- datadir
+
+  # Exit 3: a missing data directory is a missing file (BCS0602)
+  datadir=$(_stopwords_find_data) || {
+    _stopwords_error 'Stopwords data not found' '' 'Options:' \
+      '  1. Install this package, which includes the data: sudo ./install.sh install' \
+      '  2. Or point NLTK_DATA at existing NLTK data: export NLTK_DATA=~/nltk_data' \
+      '     (python -m nltk.downloader stopwords puts it in ~/nltk_data)'
+    return 3
+  }
+
+  local -- language=english
+  local -i keep_punctuation=0
+  local -i list_words=0
+  local -i count_words=0
+  local -- input_text=''
+
+  # -p means --keep-punctuation here: it is this tool's published flag, and
+  # renaming it would break callers
+  #bcscheck disable=BCS0806
+  while (($#)); do
+    case $1 in
+      -l|--language)
+        [[ -n ${2:-} ]] || { _stopwords_error "Missing argument for option ${1@Q}"; return 2; }
+        language=$2
+        shift
+        ;;
+      -p|--keep-punctuation)
+        keep_punctuation=1 ;;
+      -w|--list-words)
+        list_words=1 ;;
+      -c|--count)
+        count_words=1 ;;
+      -V|--version)
+        echo "$script_name $version"; return 0 ;;
+      -h|--help)
+        _stopwords_usage "$script_name" "$version" "$datadir"; return 0 ;;
+      -[lpwcVh]?*)
+        # Split one bundled flag off (-pw -> -p -w) and re-examine
+        set -- "${1:0:2}" "-${1:2}" "${@:2}"; continue ;;
+      -*)
+        _stopwords_error "Invalid option ${1@Q}"; return 22 ;;
+      *)
+        input_text+="$1 " ;;
+    esac
+    shift
+  done
+
+  # Validate language: a bare name only, so '-l ../../etc/passwd' cannot leave datadir
+  local -- stopwords_file="$datadir"/"$language"
+  if [[ ! $language =~ ^[a-z_]+$ || ! -f $stopwords_file ]]; then
+    _stopwords_error "Language ${language@Q} not supported." "Falling back to 'english'"
+    language=english
+    stopwords_file="$datadir"/"$language"
+    [[ -f $stopwords_file ]] || { _stopwords_error "Stopwords file not found: ${stopwords_file@Q}"; return 3; }
+  fi
+
+  # Associative array: O(1) lookup per word
+  local -A stopwords
+  local -- word
+  # `|| [[ -n $word ]]` keeps a final line that lacks a trailing newline
+  # (some NLTK lists end that way); blank lines would be an empty, invalid key
+  while IFS= read -r word || [[ -n $word ]]; do
+    [[ -n $word ]] || continue
+    # Lowercase both sides, so matching is case-insensitive
+    stopwords["${word,,}"]=1
+  done < "$stopwords_file"
+
+  [[ -n $input_text ]] || input_text=$(</dev/stdin)
+  [[ -n $input_text ]] || return 0
+
+  local -- lower_text="${input_text,,}"
+  local -a filtered_words=()
+  local -iA word_counts=()
+
+  if ((keep_punctuation)); then
+    # Split on whitespace only, so punctuation stays attached to its word
+    while [[ $lower_text =~ [[:space:]][[:space:]] ]]; do
+      lower_text="${lower_text//[[:space:]][[:space:]]/ }"
+    done
+
+    local -a words
+    IFS=' ' read -ra words <<< "$lower_text"
+    for word in "${words[@]}"; do
+      if [[ ! -v stopwords["$word"] ]]; then
+        if ((count_words)); then
+          word_counts[$word]+=1
+        else
+          filtered_words+=("$word")
+        fi
+      fi
+    done
+  else
+    # Drop possessive 's before punctuation removal would leave a stray 's'
+    lower_text="${lower_text//\'s / }"
+
+    # One tr call turns all punctuation, newlines and tabs into spaces
+    lower_text=$(tr '[:punct:]\n\t' ' ' <<< "$lower_text") \
+      || { _stopwords_error 'Failed to strip punctuation'; return 1; }
+
+    while [[ $lower_text == *'  '* ]]; do
+      lower_text="${lower_text//  / }"
+    done
+
+    local -a words
+    IFS=' ' read -ra words <<< "$lower_text"
+    for word in "${words[@]}"; do
+      [[ -n $word ]] || continue
+      if [[ ! -v stopwords["$word"] ]]; then
+        if ((count_words)); then
+          word_counts[$word]+=1
+        else
+          filtered_words+=("$word")
+        fi
+      fi
+    done
+  fi
+
+  if ((count_words)); then
+    for word in "${!word_counts[@]}"; do
+      printf '%d %s\n' "${word_counts[$word]}" "$word"
+    done | sort -k1,2 -n
+  elif ((list_words)); then
+    printf '%s\n' "${filtered_words[@]}"
+  elif ((${#filtered_words[@]})); then
+    echo "${filtered_words[*]}"
+  fi
+
+  return 0
+}
+
+# Exported together: the function is useless in a child shell without its helpers
+declare -fx stopwords _stopwords_error _stopwords_first_dir _stopwords_find_data \
+  _stopwords_usage
+
+[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
+
+# Script mode only: strict mode and a fixed PATH must never leak into a caller
+set -euo pipefail
+shopt -s inherit_errexit shift_verbose extglob nullglob
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
 stopwords "$@"
 #fin

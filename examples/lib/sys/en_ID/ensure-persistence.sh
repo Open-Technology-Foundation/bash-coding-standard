@@ -1,229 +1,150 @@
 #!/usr/bin/env bash
-# Ensure en_ID locale persists through system updates
-# Works on Debian/Ubuntu, Fedora/RHEL, and Arch Linux systems
+# Make the en_ID locale survive glibc and locale package updates.
+#
+# Debian, Ubuntu and Arch rebuild every locale listed in /etc/locale.gen when
+# those packages update, so en_ID is listed there. Fedora and RHEL ship the
+# locale archive inside a package that replaces it on update, so en_ID is
+# compiled outside the archive, as a directory under /usr/lib/locale, which
+# package updates leave alone. Debian and Ubuntu get the directory form too
+# where locales-all is installed or /etc/locale.gen is a symlink.
 set -euo pipefail
 shopt -s inherit_errexit
-
-# Script metadata
-# shellcheck disable=SC2155
-declare -r SCRIPT_PATH=$(realpath -- "$0")
-# shellcheck disable=SC2034 # SCRIPT_DIR reserved per BCS0103
-declare -r SCRIPT_DIR=${SCRIPT_PATH%/*} SCRIPT_NAME=${SCRIPT_PATH##*/}
-
-# Secure PATH for privileged execution
 declare -rx PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# Colors for output (CYAN included per BCS0706 minimal set)
-if [[ -t 1 && -t 2 ]]; then
-  # shellcheck disable=SC2034 # CYAN reserved per BCS0706
-  declare -r RED=$'\033[0;31m' GREEN=$'\033[0;32m' YELLOW=$'\033[0;33m' CYAN=$'\033[0;36m' NC=$'\033[0m'
-else
-  # shellcheck disable=SC2034
-  declare -r RED='' GREEN='' YELLOW='' CYAN='' NC=''
-fi
+declare -r SCRIPT_NAME=${0##*/}
+declare -r LOCALE_SRC=/usr/share/i18n/locales/en_ID
+declare -r LOCALE_GEN=/etc/locale.gen LOCALE_GEN_LINE='en_ID.UTF-8 UTF-8'
 
-# Global variables
-declare -- DISTRO=''
-declare -i CHANGES_MADE=0
+# Package-manager hooks written by releases up to 2.2.1. None of them ever
+# regenerated en_ID: Ubuntu's locale-gen rejects a named custom locale, DNF
+# rejected the transaction states they used, and DNF5 never reads them.
+declare -ra OLD_HOOKS=(
+  /etc/apt/apt.conf.d/99en-id-locale-gen
+  /etc/dnf/plugins/post-transaction-actions.d/en_id_locale.action
+  /etc/pacman.d/hooks/en_id_locale.hook
+)
+
 declare -i VERBOSE=1
 
-# --- Messaging functions ---
+if [[ -t 1 && -t 2 ]]; then
+  declare -r RED=$'\033[0;31m' GREEN=$'\033[0;32m' CYAN=$'\033[0;36m' NC=$'\033[0m'
+else
+  declare -r RED='' GREEN='' CYAN='' NC=''
+fi
 
+# Message functions
 _msg() {
   local -- prefix="$SCRIPT_NAME:" msg
   case ${FUNCNAME[1]} in
-    warn)  prefix+=" $YELLOW▲$NC" ;;
-    info)  prefix+=" $CYAN◉$NC" ;;
-    error) prefix+=" $RED✗$NC" ;;
-    *)     ;;
+    info)    prefix+=" $CYAN◉$NC" ;;
+    success) prefix+=" $GREEN✓$NC" ;;
+    error)   prefix+=" $RED✗$NC" ;;
+    *)       ;;
   esac
-  (($#)) || { >&2 echo; return 0; }
   for msg in "$@"; do >&2 printf '%s %s\n' "$prefix" "$msg"; done
 }
-info()  { ((VERBOSE)) || return 0; _msg "$@"; }
-# shellcheck disable=SC2317 # BCS0706 standard set; may be unused in this script
-warn()  { _msg "$@"; }
-error() { _msg "$@"; }
-die() { (($# < 2)) || error "${@:2}"; exit "${1:-0}"; }
+info()    { ((VERBOSE)) || return 0; _msg "$@"; }
+success() { ((VERBOSE)) || return 0; _msg "$@"; }
+error()   { _msg "$@"; }
+die()     { (($# < 2)) || error "${@:2}"; exit "${1:-0}"; }
 
-# --- Cleanup ---
-
-# shellcheck disable=SC2317 # invoked via trap
-cleanup() {
-  local -i exitcode=${1:-$?}
-  trap - SIGINT SIGTERM EXIT
-  exit "$exitcode"
+# Persistence functions
+# Prints debian, fedora or arch. /etc/os-release is read in a subshell so
+# that its variables (NAME, VERSION, ID...) never enter this script.
+detect_family() {
+  local -- ids
+  # shellcheck source=/dev/null
+  ids=$(. /etc/os-release && printf '%s %s' "${ID:-}" "${ID_LIKE:-}") \
+    || die 1 'Cannot read /etc/os-release'
+  case " $ids " in
+    *' debian '* | *' ubuntu '*)                                  echo debian ;;
+    *' fedora '* | *' rhel '* | *' centos '* | *' rocky '* | *' almalinux '*) echo fedora ;;
+    *' arch '*)                                                   echo arch ;;
+    *) die 1 "Unsupported distribution: ${ids@Q}" ;;
+  esac
 }
-trap 'cleanup $?' SIGINT SIGTERM EXIT
 
-# --- Execution ---
+remove_old_hooks() {
+  local -- hook
+  for hook in "${OLD_HOOKS[@]}"; do
+    [[ -e $hook ]] || continue
+    rm -f -- "$hook" || die 5 "Cannot remove ${hook@Q}"
+    info "Removed ${hook@Q}: it never regenerated the locale"
+  done
+}
 
-# Check if running as root
-if ((EUID)); then
-  die 1 'This script must be run as root or with sudo'
-fi
-
-# Detect distribution
-if [[ -f /etc/os-release ]]; then
-  . /etc/os-release
-  if [[ $ID == ubuntu ]] || [[ $ID == debian ]] || [[ ${ID_LIKE:-} == *debian* ]]; then
-    DISTRO=debian
-  elif [[ $ID == fedora ]] || [[ $ID == rhel ]] || [[ $ID == centos ]] || [[ "${ID_LIKE:-}" == *rhel* ]] || [[ ${ID_LIKE:-} == *fedora* ]]; then
-    DISTRO=fedora
-  elif [[ $ID == arch ]] || [[ ${ID_LIKE:-} == *arch* ]]; then
-    DISTRO=arch
+# Debian, Ubuntu, Arch: the locales/glibc packages rebuild what is listed here.
+list_in_locale_gen() {
+  if [[ -f $LOCALE_GEN ]] && grep -qxF -- "$LOCALE_GEN_LINE" "$LOCALE_GEN"; then
+    info "en_ID is already listed in $LOCALE_GEN"
+    return 0
   fi
-fi
-
-if [[ -z $DISTRO ]]; then
-  die 1 'Unable to detect distribution'
-fi
-
-info "Ensuring en_ID locale persistence on ${DISTRO}..."
-
-# Check if en_ID locale definition exists
-if [[ ! -f /usr/share/i18n/locales/en_ID ]]; then
-  die 1 'en_ID locale definition not found at /usr/share/i18n/locales/en_ID' \
-        'Please install the en_ID locale first using the appropriate install script.'
-fi
-
-# Debian/Ubuntu specific persistence
-if [[ $DISTRO == debian ]]; then
-  info 'Setting up Debian/Ubuntu persistence mechanisms...'
-
-  # Add to locale.gen
-  if [[ -f /etc/locale.gen ]]; then
-    if ! grep -q '^en_ID.UTF-8' /etc/locale.gen; then
-      echo 'en_ID.UTF-8 UTF-8' >> /etc/locale.gen \
-        || die 5 'Failed to write /etc/locale.gen'
-      info 'Added en_ID to /etc/locale.gen'
-      CHANGES_MADE=1
-    else
-      info 'en_ID already in /etc/locale.gen'
-    fi
+  # A last line without a newline would merge with the appended one
+  if [[ -s $LOCALE_GEN && -n $(tail -c 1 -- "$LOCALE_GEN") ]]; then
+    printf '\n' >> "$LOCALE_GEN" || die 5 "Cannot write ${LOCALE_GEN@Q}"
   fi
+  printf '%s\n' "$LOCALE_GEN_LINE" >> "$LOCALE_GEN" || die 5 "Cannot write ${LOCALE_GEN@Q}"
+  info "Listed en_ID in $LOCALE_GEN"
+}
 
-  # Create APT hook
-  declare -r APT_HOOK_FILE=/etc/apt/apt.conf.d/99en-id-locale-gen
-  if [[ ! -f $APT_HOOK_FILE ]]; then
-    cat > "$APT_HOOK_FILE" << 'EOF' || die 5 "Failed to create APT hook ${APT_HOOK_FILE@Q}"
-// Automatically regenerate en_ID locale after package updates
-DPkg::Post-Invoke { "if [ -f /etc/locale.gen ] && grep -q '^en_ID.UTF-8' /etc/locale.gen; then locale-gen en_ID.UTF-8 2>/dev/null || true; fi"; };
-EOF
-    info 'Created APT hook for automatic locale regeneration'
-    CHANGES_MADE=1
+# Fedora, RHEL: a directory under /usr/lib/locale, outside the packaged archive.
+compile_outside_archive() {
+  localedef --no-archive -i en_ID -f UTF-8 en_ID.UTF-8 \
+    || die 1 'localedef failed to compile en_ID outside the archive'
+  info 'Compiled en_ID to /usr/lib/locale/en_ID.utf8'
+}
+
+# locales-all deletes the locale archive on every update, and while it is
+# installed the locales package skips locale-gen.
+locales_all_wanted() {
+  local -- want
+  # shellcheck disable=SC2016 # ${...} is a dpkg-query format, not a shell expansion
+  want=$(dpkg-query -W -f='${db:Status-Want}' locales-all 2>/dev/null) || return 1
+  [[ $want == install ]]
+}
+
+# Debian, Ubuntu. A symlinked /etc/locale.gen (debconf's "All locales") points
+# into a file the locales package replaces, so en_ID is not written there.
+# Either case needs the directory form, which package updates leave alone.
+persist_debian() {
+  if [[ -L $LOCALE_GEN ]]; then
+    info "$LOCALE_GEN links to a packaged file: en_ID is not listed there"
   else
-    info 'APT hook already exists'
+    list_in_locale_gen
+  fi
+  if [[ -L $LOCALE_GEN ]] || locales_all_wanted; then
+    compile_outside_archive
+  fi
+}
+
+main() {
+  local -- family all
+
+  ((EUID == 0)) || die 13 'This script must be run as root or with sudo'
+  family=$(detect_family)
+  [[ -f $LOCALE_SRC ]] || die 3 "en_ID source not found ${LOCALE_SRC@Q}" \
+    'Install the locale first: sudo make install'
+
+  info "Setting up en_ID persistence ($family family)"
+  remove_old_hooks
+  case $family in
+    debian) persist_debian ;;
+    arch)   list_in_locale_gen ;;
+    fedora) compile_outside_archive ;;
+    *)      die 1 "Unsupported family ${family@Q}" ;;
+  esac
+
+  # Repairs a locale that has already disappeared
+  all=$(locale -a) || die 1 'locale -a failed, so the locale list cannot be read'
+  if [[ $all != *en_ID* ]]; then
+    localedef -i en_ID -f UTF-8 en_ID.UTF-8 || die 1 'localedef failed to compile en_ID'
+    info 'Compiled en_ID into the locale archive'
   fi
 
-  # Regenerate locale now
-  if ((CHANGES_MADE)); then
-    info 'Regenerating locale...'
-    locale-gen en_ID.UTF-8 || die 1 'locale-gen failed'
-  fi
+  all=$(locale -a) || die 1 'locale -a failed, so the setup cannot be confirmed'
+  [[ $all == *en_ID* ]] || die 1 'en_ID is not available after setup'
+  success 'en_ID will be kept across glibc and locale package updates'
+}
 
-# Fedora/RHEL specific persistence
-elif [[ $DISTRO == fedora ]]; then
-  info 'Setting up Fedora/RHEL persistence mechanisms...'
-
-  # Create DNF post-transaction hook
-  declare -r DNF_HOOK_DIR=/etc/dnf/plugins/post-transaction-actions.d
-  declare -r DNF_HOOK_FILE="$DNF_HOOK_DIR"/en_id_locale.action
-
-  if [[ ! -d $DNF_HOOK_DIR ]]; then
-    mkdir -p "$DNF_HOOK_DIR" \
-      || die 5 "Failed to create hook directory ${DNF_HOOK_DIR@Q}"
-  fi
-
-  if [[ ! -f $DNF_HOOK_FILE ]]; then
-    cat > "$DNF_HOOK_FILE" << 'EOF' || die 5 "Failed to create DNF hook ${DNF_HOOK_FILE@Q}"
-# Regenerate en_ID locale after glibc updates
-glibc*:update:/usr/bin/localedef -i en_ID -f UTF-8 en_ID.UTF-8 2>/dev/null || true
-glibc*:install:/usr/bin/localedef -i en_ID -f UTF-8 en_ID.UTF-8 2>/dev/null || true
-glibc*:reinstall:/usr/bin/localedef -i en_ID -f UTF-8 en_ID.UTF-8 2>/dev/null || true
-EOF
-    info 'Created DNF hook for automatic locale regeneration'
-    CHANGES_MADE=1
-  else
-    info 'DNF hook already exists'
-  fi
-
-  # Regenerate locale now
-  info 'Regenerating locale...'
-  localedef -i en_ID -f UTF-8 en_ID.UTF-8 || die 1 'localedef failed'
-
-# Arch Linux specific persistence
-elif [[ $DISTRO == arch ]]; then
-  info 'Setting up Arch Linux persistence mechanisms...'
-
-  # Add to locale.gen
-  if [[ -f /etc/locale.gen ]]; then
-    if ! grep -q '^en_ID.UTF-8' /etc/locale.gen; then
-      echo 'en_ID.UTF-8 UTF-8' >> /etc/locale.gen \
-        || die 5 'Failed to write /etc/locale.gen'
-      info 'Added en_ID to /etc/locale.gen'
-      CHANGES_MADE=1
-    else
-      info 'en_ID already in /etc/locale.gen'
-    fi
-  fi
-
-  # Create pacman hook
-  declare -r PACMAN_HOOK_DIR=/etc/pacman.d/hooks
-  declare -r PACMAN_HOOK_FILE="$PACMAN_HOOK_DIR"/en_id_locale.hook
-
-  if [[ ! -d $PACMAN_HOOK_DIR ]]; then
-    mkdir -p "$PACMAN_HOOK_DIR" \
-      || die 5 "Failed to create hook directory ${PACMAN_HOOK_DIR@Q}"
-  fi
-
-  if [[ ! -f $PACMAN_HOOK_FILE ]]; then
-    cat > "$PACMAN_HOOK_FILE" << 'EOF' || die 5 "Failed to create Pacman hook ${PACMAN_HOOK_FILE@Q}"
-[Trigger]
-Operation = Upgrade
-Operation = Install
-Type = Package
-Target = glibc
-
-[Action]
-Description = Regenerate en_ID locale
-When = PostTransaction
-Exec = /usr/bin/bash -c "if grep -q '^en_ID.UTF-8' /etc/locale.gen; then locale-gen en_ID.UTF-8 2>/dev/null || true; fi"
-EOF
-    info 'Created Pacman hook for automatic locale regeneration'
-    CHANGES_MADE=1
-  else
-    info 'Pacman hook already exists'
-  fi
-
-  # Regenerate locale now
-  if ((CHANGES_MADE)); then
-    info 'Regenerating locale...'
-    locale-gen en_ID.UTF-8 || die 1 'locale-gen failed'
-  fi
-fi
-
-# Verify locale is available
-info
-info 'Verifying locale availability...'
-if locale -a 2>/dev/null | grep -q 'en_ID'; then
-  info "${GREEN}✓ en_ID locale is available$NC"
-else
-  die 1 'en_ID locale is not available after persistence setup'
-fi
-
-# Test the locale
-info 'Testing locale...'
-if LC_ALL=en_ID.UTF-8 date +"%x" >/dev/null 2>&1; then
-  info "${GREEN}✓ Locale test successful$NC"
-  >&2 LC_ALL=en_ID.UTF-8 date +'%x = %A, %d %B %Y'
-else
-  die 1 'Locale test failed'
-fi
-
-info
-info "${GREEN}Persistence mechanisms successfully configured!$NC"
-info 'The en_ID locale will now be automatically regenerated after system updates.'
-
-exit 0
+main "$@"
 #fin

@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 # Integration tests for complex pipeline scenarios
 
-set -uo pipefail
+set -euo pipefail
+shopt -s inherit_errexit
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
-TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$TEST_DIR/../.." && pwd)"
-source "$TEST_DIR/../utils.sh"
+declare -- TEST_DIR ROOT_DIR
+TEST_DIR=$(realpath -- "$(dirname -- "${BASH_SOURCE[0]}")") \
+  || { >&2 echo "${0##*/}: ✗ cannot resolve test directory"; exit 1; }
+ROOT_DIR=${TEST_DIR%/*/*}  # test/<category> -> project root
+[[ -f $ROOT_DIR/test/utils.sh ]] || { >&2 echo "${0##*/}: ✗ missing test/utils.sh"; exit 3; }
+#shellcheck source=test/utils.sh
+source -- "$ROOT_DIR"/test/utils.sh || { >&2 echo "${0##*/}: ✗ cannot source test/utils.sh"; exit 1; }
+test_init || { >&2 echo "${0##*/}: ✗ test_init failed"; exit 1; }
 
 TRIM="$ROOT_DIR/trim.bash"
 LTRIM="$ROOT_DIR/ltrim.bash"
@@ -14,10 +21,10 @@ SQUEEZE="$ROOT_DIR/squeeze.bash"
 
 # Verify utilities exist
 for util in "$TRIM" "$LTRIM" "$RTRIM" "$SQUEEZE"; do
-  [[ -x "$util" ]] || { echo "Error: $(basename "$util") not found"; exit 1; }
+  [[ -x "$util" ]] || { >&2 echo "${0##*/}: ✗ ${util@Q} not found or not executable"; exit 1; }
 done
 
-echo "Testing complex pipeline scenarios..."
+>&2 echo "Testing complex pipeline scenarios..."
 
 declare -i passed=0 failed=0
 
@@ -27,13 +34,13 @@ test_four_stage_pipeline() {
   input=$'  c  \n  a  \n  b  \n  a  '
   expected=$'a\nb\nc'
 
-  result=$(echo "$input" | "$TRIM" | sort | uniq)
+  result=$(echo "$input" | "$TRIM" | sort | uniq) || fail 'trim|sort|uniq pipeline exited non-zero'
 
   if [[ "$result" == "$expected" ]]; then
     echo -e "${GREEN}Test passed${NC}: 4-stage pipeline (trim|sort|uniq)"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: 4-stage pipeline"
+    >&2 echo -e "${RED}Test failed${NC}: 4-stage pipeline"
     ((++failed))
   fi
 }
@@ -41,13 +48,13 @@ test_four_stage_pipeline() {
 # Test here-string with trim
 test_here_string() {
   local -- result
-  result=$("$TRIM" <<< "  hello world  ")
+  result=$("$TRIM" <<< "  hello world  ") || fail 'trim exited non-zero on here-string input'
 
   if [[ "$result" == "hello world" ]]; then
     echo -e "${GREEN}Test passed${NC}: Here-string input"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: Here-string input (got: $result)"
+    >&2 echo -e "${RED}Test failed${NC}: Here-string input (got: $result)"
     ((++failed))
   fi
 }
@@ -62,13 +69,13 @@ test_here_doc() {
   line2
   line3
 EOF
-)
+) || fail 'trim exited non-zero on here-doc input'
 
   if [[ "$result" == "$expected" ]]; then
     echo -e "${GREEN}Test passed${NC}: Here-doc input"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: Here-doc input"
+    >&2 echo -e "${RED}Test failed${NC}: Here-doc input"
     ((++failed))
   fi
 }
@@ -76,13 +83,13 @@ EOF
 # Test process substitution
 test_process_substitution() {
   local -- result
-  result=$(cat < <("$TRIM" "  process sub  "))
+  result=$(cat <("$TRIM" "  process sub  "); wait "$!") || fail 'trim in a process substitution exited non-zero'
 
   if [[ "$result" == "process sub" ]]; then
     echo -e "${GREEN}Test passed${NC}: Process substitution"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: Process substitution (got: $result)"
+    >&2 echo -e "${RED}Test failed${NC}: Process substitution (got: $result)"
     ((++failed))
   fi
 }
@@ -90,13 +97,13 @@ test_process_substitution() {
 # Test nested command substitution
 test_nested_substitution() {
   local -- result
-  result=$("$TRIM" "$("$TRIM" "    nested    ")")
+  result=$("$TRIM" "$("$TRIM" "    nested    ")") || fail 'nested trim exited non-zero'
 
   if [[ "$result" == "nested" ]]; then
     echo -e "${GREEN}Test passed${NC}: Nested command substitution"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: Nested command substitution (got: $result)"
+    >&2 echo -e "${RED}Test failed${NC}: Nested command substitution (got: $result)"
     ((++failed))
   fi
 }
@@ -104,13 +111,13 @@ test_nested_substitution() {
 # Test chained trim operations
 test_chained_trims() {
   local -- result
-  result=$(echo "  chained  " | "$LTRIM" | "$RTRIM")
+  result=$(echo "  chained  " | "$LTRIM" | "$RTRIM") || fail 'ltrim|rtrim pipeline exited non-zero'
 
   if [[ "$result" == "chained" ]]; then
     echo -e "${GREEN}Test passed${NC}: Chained ltrim|rtrim"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: Chained ltrim|rtrim (got: $result)"
+    >&2 echo -e "${RED}Test failed${NC}: Chained ltrim|rtrim (got: $result)"
     ((++failed))
   fi
 }
@@ -121,13 +128,13 @@ test_with_grep() {
   input=$'  keep  \n  remove  \n  keep  '
   expected=$'keep\nkeep'
 
-  result=$(echo "$input" | "$TRIM" | grep "keep")
+  result=$(echo "$input" | "$TRIM" | grep "keep") || fail 'trim|grep pipeline exited non-zero'
 
   if [[ "$result" == "$expected" ]]; then
     echo -e "${GREEN}Test passed${NC}: Pipeline with grep"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: Pipeline with grep"
+    >&2 echo -e "${RED}Test failed${NC}: Pipeline with grep"
     ((++failed))
   fi
 }
@@ -137,13 +144,14 @@ test_with_wc() {
   local -- input line_count
   input=$'  one  \n  two  \n  three  '
 
-  line_count=$(echo "$input" | "$TRIM" | wc -l)
+  line_count=$(echo "$input" | "$TRIM" | wc -l) || fail 'trim|wc pipeline exited non-zero'
+  [[ $line_count =~ ^[0-9]+$ ]] || fail "wc -l gave non-integer ${line_count@Q}"
 
-  if [[ "$line_count" -eq 3 ]]; then
+  if ((line_count == 3)); then
     echo -e "${GREEN}Test passed${NC}: Pipeline with wc"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: Pipeline with wc (got: $line_count lines)"
+    >&2 echo -e "${RED}Test failed${NC}: Pipeline with wc (got: $line_count lines)"
     ((++failed))
   fi
 }
@@ -151,13 +159,13 @@ test_with_wc() {
 # Test squeeze then trim
 test_squeeze_then_trim() {
   local -- result
-  result=$(echo "  multiple    spaces  " | "$SQUEEZE" | "$TRIM")
+  result=$(echo "  multiple    spaces  " | "$SQUEEZE" | "$TRIM") || fail 'squeeze|trim pipeline exited non-zero'
 
   if [[ "$result" == "multiple spaces" ]]; then
     echo -e "${GREEN}Test passed${NC}: squeeze|trim pipeline"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: squeeze|trim (got: $result)"
+    >&2 echo -e "${RED}Test failed${NC}: squeeze|trim (got: $result)"
     ((++failed))
   fi
 }
@@ -165,13 +173,13 @@ test_squeeze_then_trim() {
 # Test subshell preservation
 test_subshell() {
   local -- result
-  result=$( (echo "  subshell  " | "$TRIM") )
+  result=$( (echo "  subshell  " | "$TRIM") ) || fail 'trim in a subshell exited non-zero'
 
   if [[ "$result" == "subshell" ]]; then
     echo -e "${GREEN}Test passed${NC}: Subshell execution"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: Subshell execution (got: $result)"
+    >&2 echo -e "${RED}Test failed${NC}: Subshell execution (got: $result)"
     ((++failed))
   fi
 }
@@ -191,7 +199,12 @@ test_subshell
 echo
 echo "=== Summary: $passed passed, $failed failed ==="
 
-((failed == 0)) && echo "All complex pipeline tests passed!" && exit 0
-echo "Complex pipeline tests FAILED" && exit 1
+if ((failed == 0)); then
+  echo "All complex pipeline tests passed!"
+  exit 0
+else
+  >&2 echo "Complex pipeline tests FAILED"
+  exit 1
+fi
 
 #fin

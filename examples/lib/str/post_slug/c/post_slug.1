@@ -1,0 +1,195 @@
+.\" post_slug(1) - manual page for the post_slug C binary and its slugify link
+.\" update_version.sh rewrites the version and date on the .TH line.
+.TH POST_SLUG 1 "2026-11-06" "post_slug 1.1.0" "User Commands"
+.SH NAME
+post_slug, slugify \- convert text to URL- and filename-friendly ASCII slugs
+.SH SYNOPSIS
+.B post_slug
+.RB [ \-\- ]
+.I input_str
+.RI [ sep_char " [" preserve_case " [" max_len ]]]
+.br
+.B post_slug \-\-stdin
+.RI [ sep_char " [" preserve_case " [" max_len ]]]
+.br
+.B post_slug
+.BR \-h | \-\-help
+.PP
+.B slugify
+is a symbolic link to
+.B post_slug
+and takes the same arguments.
+.SH DESCRIPTION
+.B post_slug
+turns a title, headline or other text into a slug: ASCII letters and
+digits joined by single separators, safe to use in a URL or a filename.
+Accented letters are transliterated
+(\(lqCaf\('e M\(:uller\(rq becomes \(lqcafe\-muller\(rq),
+characters with no ASCII form are deleted,
+and everything else becomes the separator.
+.PP
+It is the C member of a family of implementations (Python, JavaScript,
+PHP, Bash and C) that give the same slug for the same input.
+.PP
+The steps, in order:
+.IP 1. 4
+The input is cut to 255 characters (Unicode code points, not bytes).
+.IP 2.
+A few characters are replaced first:
+\(lq\ &\ \(rq becomes \(lq\ and\ \(rq;
+\(Eu, \(Po, \(co, \(rg and \(tm become EUR, GBP, C, R and \-TM;
+dashes, \(12 and \(14 become separators;
+\(r!, soft hyphens and emoji are deleted.
+.IP 3.
+HTML entities such as
+.B &amp;
+become separators.
+An entity runs from
+.B &
+to the first
+.BR ; .
+.IP 4.
+The text is transliterated to ASCII with glibc
+.BR iconv (3)
+.RB ( ASCII//TRANSLIT ),
+and characters with no ASCII form are deleted.
+.IP 5.
+Apostrophes, double quotes and backticks are deleted,
+so \(lqIt's\(rq becomes \(lqits\(rq.
+.IP 6.
+Upper case becomes lower case unless
+.I preserve_case
+is set.
+.IP 7.
+Each run of characters other than ASCII letters and digits becomes one
+separator, and separators at either end are removed.
+.IP 8.
+If
+.I max_len
+is set and the slug is longer, the slug is cut to
+.I max_len
+characters, then back to its last separator if it has one.
+.SH OPTIONS
+Options are recognised only as the first argument.
+.TP
+.B \-\-stdin
+Read input strings from standard input, one per line, and write one slug
+per line.
+An empty input line gives an empty output line, so the output stays
+aligned with the input.
+One process handles any number of lines.
+.TP
+.BR \-h ", " \-\-help
+Print a usage summary to standard output and exit.
+.TP
+.B \-\-
+Treat the next argument as
+.IR input_str ,
+even if it is
+.B \-h
+or
+.BR \-\-stdin .
+.PP
+A lone
+.B \-
+is an ordinary input string (its slug is empty), not standard input.
+.SH ARGUMENTS
+.TP
+.I input_str
+The text to convert.
+Required unless
+.B \-\-stdin
+is given.
+.TP
+.I sep_char
+The separator: one ASCII character.
+Only the first character of the argument is used; empty or omitted means
+.BR \- .
+.TP
+.I preserve_case
+.B 0
+(the default) gives lower case; any other non-negative integer keeps the
+case of the input.
+.TP
+.I max_len
+The longest slug allowed;
+.B 0
+(the default) means no limit.
+.SH EXIT STATUS
+.TP
+.B 0
+Success, including input whose slug is empty.
+.TP
+.B 1
+Out of memory, or a read or write error.
+.TP
+.B 2
+No input string given; the usage summary goes to standard error.
+.TP
+.B 22
+A non-ASCII
+.IR sep_char ,
+or a
+.I preserve_case
+or
+.I max_len
+that is not a non-negative integer.
+.SH ENVIRONMENT
+The output does not depend on the locale.
+Transliteration always runs under
+.BR C.UTF\-8 ,
+whatever
+.BR LANG ,
+.B LC_ALL
+or
+.B LC_CTYPE
+say, so the same input gives the same slug under
+.BR cron (8),
+under
+.BR LC_ALL=C ,
+or when the named locale is not installed.
+.SH EXAMPLES
+.EX
+$ post_slug \(aqHello, World!\(aq
+hello\-world
+$ post_slug \(aqHello, World!\(aq _ 1
+Hello_World
+$ post_slug \(aqSmith & Wesson: AT&amp;T\(aq
+smith\-and\-wesson\-at\-t
+$ post_slug \(aqLong title here\(aq \- 0 8
+long
+$ slugify \-\- \-h
+h
+.EE
+.PP
+Pair each line of a file with its slug:
+.PP
+.EX
+$ paste titles.txt <(slugify \-\-stdin < titles.txt)
+.EE
+.SH NOTES
+Text in a non-Latin script, such as Chinese, Greek or Cyrillic, gives an
+empty slug:
+.BR iconv (3)
+has no ASCII form for it.
+So does input that is not valid UTF\-8.
+.PP
+The Python and JavaScript implementations use Unicode NFKD decomposition
+instead of
+.BR iconv (3).
+About 700 rare code points (Latin letters with hooks or strokes, enclosed
+letters, some mathematical brackets and spaces) give different slugs
+there.
+.PP
+The source tree also has
+.BR slugify\-files ,
+which renames files to their slugs.
+.SH SEE ALSO
+.BR iconv (1),
+.BR iconv (3)
+.PP
+https://github.com/Open\-Technology\-Foundation/post_slug
+.SH AUTHOR
+Gary Dean <garydean@okusi.id>
+.SH COPYRIGHT
+GNU General Public License v3.0 or later.

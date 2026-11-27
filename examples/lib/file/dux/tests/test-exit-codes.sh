@@ -52,6 +52,28 @@ assert_contains "$output" 'Not a directory' "Shows 'not a directory' for file"
 output=$("$DUX" "$TEST_DIR" "$TEST_DIR" 2>&1); ec=$?
 assert_exit_code 2 "$ec" 'Exit 2 on too many arguments'
 
+# Test: Exit 2 when -- has extra operands
+output=$("$DUX" -- "$TEST_DIR" "$TEST_DIR"/with-subdirs 2>&1); ec=$?
+assert_exit_code 2 "$ec" 'Exit 2 on extra operands after --'
+
+# Test: Exit 0 when -- has no operand
+output=$(cd "$TEST_DIR" && "$DUX" -- 2>&1); ec=$?
+assert_exit_code 0 "$ec" 'Exit 0 on -- with no operand'
+
+# Test: An empty operand is a bad path, not "no operand" (like ls '')
+output=$(cd -- "$TEST_DIR" && "$DUX" '' 2>&1); ec=$?
+assert_exit_code 3 "$ec" "Exit 3 on empty operand ''"
+assert_contains "$output" "Not a directory ''" 'Empty operand reported as not a directory'
+output=$(cd -- "$TEST_DIR" && "$DUX" -- '' 2>&1); ec=$?
+assert_exit_code 3 "$ec" "Exit 3 on empty operand after --"
+
+# Test: Empty operands still count towards the one-operand limit
+#bcscheck disable=BCS1005 # operands before any '--' are the subject under test
+output=$("$DUX" '' '' "$TEST_DIR" 2>&1); ec=$?
+assert_exit_code 2 "$ec" 'Exit 2 when empty operands precede a directory'
+output=$("$DUX" '' -- "$TEST_DIR" 2>&1); ec=$?
+assert_exit_code 2 "$ec" 'Exit 2 on empty operand plus operand after --'
+
 # Test: Exit 22 on invalid option
 output=$("$DUX" --invalid-option 2>&1); ec=$?
 assert_exit_code 22 "$ec" 'Exit 22 on invalid option'

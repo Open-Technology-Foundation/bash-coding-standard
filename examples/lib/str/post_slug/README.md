@@ -5,12 +5,13 @@
 [![PHP 8.0+](https://img.shields.io/badge/php-8.0+-777BB4.svg)](https://www.php.net/)
 [![Bash 5.1+](https://img.shields.io/badge/bash-5.1+-4EAA25.svg)](https://www.gnu.org/software/bash/)
 [![Node 12.2+](https://img.shields.io/badge/node-12.2+-339933.svg)](https://nodejs.org/)
+[![C C11](https://img.shields.io/badge/c-c11-A8B9CC.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 
 > A consistent, cross-language slug generator for creating URL-safe and filename-safe strings from any text input.
 
 ## 🎯 Overview
 
-**post_slug** converts any text into clean, readable slugs that are safe for URLs, filenames, and other contexts where only ASCII alphanumeric characters are allowed. With identical implementations in **Python**, **JavaScript**, **PHP**, and **Bash**, it ensures consistent output across your entire stack.
+**post_slug** converts any text into clean, readable slugs that are safe for URLs, filenames, and other contexts where only ASCII alphanumeric characters are allowed. With identical implementations in **Python**, **JavaScript**, **PHP**, **Bash**, and **C**, it ensures consistent output across your entire stack.
 
 ### Key Features
 
@@ -72,6 +73,19 @@ source post_slug.bash
 
 # Or add to your .bashrc
 echo 'source /path/to/post_slug.bash' >> ~/.bashrc
+```
+
+### C
+
+```bash
+# Build the static library + CLI binary ('make' alone only prints help)
+cd c && make build
+
+# Install the CLI globally (optional)
+sudo make install                # -> /usr/local/bin/post_slug
+
+# Link against the static library
+cc -O2 -Ic -o myapp myapp.c c/libpost_slug.a
 ```
 
 ## 🚀 Usage
@@ -222,35 +236,84 @@ done
 ```
 </details>
 
+<details>
+<summary><b>C</b></summary>
+
+```c
+#include "post_slug.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(void) {
+    /* Basic usage */
+    char *s = post_slug("Hello, World!", '-', 0, 0);
+    if (s) { puts(s); free(s); }            /* "hello-world" */
+
+    /* Underscore separator */
+    s = post_slug("Hello, World!", '_', 0, 0);
+    if (s) { puts(s); free(s); }            /* "hello_world" */
+
+    /* Preserve case */
+    s = post_slug("Hello, World!", '-', 1, 0);
+    if (s) { puts(s); free(s); }            /* "Hello-World" */
+
+    /* Max length 20, cuts at last separator */
+    s = post_slug("This is a very long title that needs truncation",
+                  '-', 0, 20);
+    if (s) { puts(s); free(s); }            /* "this-is-a-very-long" */
+    return 0;
+}
+```
+
+CLI:
+
+```bash
+./c/_post_slug "Hello, World!"                  # hello-world
+./c/_post_slug "Hello, World!" _ 1              # Hello_World
+./c/_post_slug "A title with Ŝtřãņġę chars"    # a-title-with-strange-chars
+./c/_post_slug --stdin _ < titles.txt           # one slug per line, one process
+```
+</details>
+
 ## 🛠️ Advanced Features
 
 ### Batch File Renaming
 
-The included `slug-files` utility allows batch renaming of files:
+The included `slugify-files` utility renames files to slugs, keeping each
+extension. It lists nothing in advance, but asks once for confirmation
+(`-f` skips the question):
 
 ```bash
 # Rename all .txt files in a directory
-./slug-files *.txt
+./slugify-files *.txt
 
 # With custom separator and preserved case
-./slug-files -s _ -p /path/to/files/*
+./slugify-files -s _ -p /path/to/files/*
 
-# Dry run (no actual renaming)
-./slug-files -n *.pdf
+# Skip a file whose slug name already exists (by default it is overwritten)
+./slugify-files -n *.pdf
 ```
+
+The separator must be one of `- _ . + ~ , = @`. Every operand is checked
+before anything is renamed, and a file whose slug names an existing
+directory is skipped, not moved into it. `slugify-files --help` lists all
+options.
 
 ### Command-Line Usage
 
-Create convenient command-line aliases:
+The C binary installs as `post_slug`, with `slugify` as a symlink to it
+(`cd c && sudo make install`). An existing `slugify` symlink is replaced; a
+real file of that name, such as another package's `slugify`, is left alone,
+and `make check` reports when an earlier PATH entry shadows the link. The
+install also puts in a manpage, `man post_slug` (or `man slugify`). The
+Bash script takes the same arguments and runs as `./post_slug.bash`.
 
 ```bash
-# Add to your shell configuration
-ln -s /path/to/post_slug.bash /usr/local/bin/post_slug
-ln -s /path/to/slug-files /usr/local/bin/slug-files
+ln -s /path/to/slugify-files /usr/local/bin/slugify-files
 
-# Now use directly
-post_slug "My Document Title!"
-# Output: my-document-title
+post_slug "My Document Title!"    # my-document-title
+slugify "My Document Title!"      # my-document-title
+slugify --stdin < titles.txt      # one slug per line
 ```
 
 ## 🔧 How It Works
@@ -272,17 +335,30 @@ The slug generation process follows these steps:
 Different languages use different transliteration methods:
 
 - **Python/JavaScript**: `unicodedata.normalize('NFKD')`
-- **PHP/Bash**: `iconv('UTF-8', 'ASCII//TRANSLIT')`
+- **PHP/Bash/C**: `iconv('UTF-8', 'ASCII//TRANSLIT')` (glibc)
 
 To ensure consistency, manual transliteration tables ("kludges") handle edge cases:
 
 ```python
 # Example kludges
 '€' → 'EUR'  # Euro symbol
+'£' → 'GBP'  # Pound sign
 '©' → 'C'    # Copyright
 '®' → 'R'    # Registered trademark
 '™' → '-TM'  # Trademark
 ```
+
+The rules every implementation follows:
+
+- A character with no ASCII form is **deleted**, not replaced by the
+  separator: `x♠y` → `xy`. This includes emoji (U+1F300–U+1FAFF), for which
+  iconv would otherwise give forms such as `:-D` or `<3`.
+- An HTML entity runs from `&` to the **first** `;` before a space or tab:
+  `&lt;Test&gt;` → `test`.
+- The 255-character input limit counts characters (code points), not bytes
+  or UTF-16 units.
+- Output does not depend on the locale: Bash, PHP and C run iconv under
+  `C.UTF-8` and restore the caller's locale afterwards.
 
 ## 🧪 Testing
 
@@ -299,6 +375,10 @@ cd unittests
 # Quiet mode (errors only)
 ./validate_slug_scripts -q datasets/products.txt
 ```
+
+The validator runs each implementation once per separator and case setting
+(about 7 seconds for the 9,828 headlines), rebuilds the C binary when its
+source has changed, and exits 1 if any slugs differ.
 
 ### Test Datasets
 
@@ -333,6 +413,16 @@ post_slug("Привет мир")  # ""
 post_slug("Café résumé")  # "cafe-resume"
 ```
 
+The implementations agree on every line of the test datasets, but not on
+every Unicode character. Python and JavaScript transliterate with NFKD; PHP,
+Bash and C with glibc iconv. About 700 of the 149,000 assigned code points
+still differ between the two groups, nearly all rare: Latin letters with
+hooks or strokes (`ƀ`, `ȡ`), enclosed and squared letters (`Ⓐ`, `㎂`),
+mathematical brackets, and a few space characters.
+
+Invalid UTF-8 gives an empty string in PHP, Bash and C. Python and
+JavaScript never see invalid bytes: the caller decodes the text first.
+
 ### Security Considerations
 
 - Input is automatically limited to 255 characters
@@ -348,6 +438,7 @@ post_slug("Café résumé")  # "cafe-resume"
 | PHP | 8.0 | 8.3 |
 | Bash | 5.1 | 5.2 |
 | Node.js | 12.2 | 20.x |
+| C | C11 + glibc iconv | gcc 13.3 / glibc 2.39 |
 
 ## 🤝 Contributing
 
@@ -394,4 +485,4 @@ This project is licensed under the GNU General Public License v3.0 or later - se
 
 **Repository**: https://github.com/Open-Technology-Foundation/post_slug  
 **Author**: Gary Dean <garydean@okusi.id>  
-**Version**: 1.0.1
+**Version**: 1.1.0

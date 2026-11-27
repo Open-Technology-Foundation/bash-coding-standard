@@ -3,13 +3,17 @@
 
 # Works both as a pipe and with string arguments
 remblanks() {
+  local -i rc=0
   if (($#)); then
     # Arguments provided - process as string
-    printf '%s\n' "$@" | grep -v '^[[:space:]]*#\|^[[:space:]]*$'
+    printf '%s\n' "$@" | grep -v '^[[:space:]]*#\|^[[:space:]]*$' || rc=$?
   else
     # No arguments - read from stdin (pipe mode)
-    grep -v '^[[:space:]]*#\|^[[:space:]]*$'
+    grep -v '^[[:space:]]*#\|^[[:space:]]*$' || rc=$?
   fi
+  # grep exits 1 when every line was filtered out: an empty result, not an error.
+  # Other statuses (2 = read error, 128+N = signal) pass through unchanged.
+  return $((rc == 1 ? 0 : rc))
 }
 
 
@@ -19,9 +23,11 @@ remblanks() {
 # --- Script Mode ---
 set -euo pipefail
 shopt -s inherit_errexit
+# Below the source fence: a sourcing shell keeps its own PATH (BCS1002)
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
 if (($#)) && [[ $1 == -h || $1 == --help ]]; then
-  declare -r VERSION=1.0.0 SCRIPT_NAME=${0##*/}
+  declare -r VERSION=1.1.0 SCRIPT_NAME=${0##*/}
   cat <<HELP
 $SCRIPT_NAME $VERSION - Remove #comment lines and blank lines from input or string argument
 
@@ -44,6 +50,10 @@ Description:
 
 Options:
   -h, --help    Show this help and exit.
+
+Exit status:
+  0  Success, including when every line was filtered out (empty output)
+  2  Read error (from grep); other non-zero statuses pass through
 
 Examples:
   $SCRIPT_NAME <file.txt                    # filter a file

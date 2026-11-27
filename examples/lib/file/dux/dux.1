@@ -1,6 +1,6 @@
 .\" dux - Quick directory size overview
 .\" Man page for dux (dir-sizes)
-.TH DUX 1 "December 2025" "dux 1.4.0" "User Commands"
+.TH DUX 1 "November 2026" "dux 1.5.0" "User Commands"
 .SH NAME
 dux \- quick directory size overview
 .SH SYNOPSIS
@@ -18,8 +18,15 @@ viewing in a terminal.
 .SH OPTIONS
 .TP
 .B \-L
-Follow symbolic links when finding directories. Without this option,
-symlinked directories may not be traversed.
+Follow all symbolic links: symlinked subdirectories are listed and sized
+as their targets. Without this option only a symlinked starting directory
+is followed, and symlinked subdirectories are not listed.
+.TP
+.BR \-x ", " \-\-one\-file\-system
+Stay on the target's filesystem: subdirectories that are mount points of
+other filesystems are left out, and sizes do not count other filesystems
+mounted below (as \fBdu \-x\fR). Useful for \fBsudo dux /\fR, which would
+otherwise include \fI/proc\fR and network mounts.
 .TP
 .BR \-q ", " \-\-quiet
 Suppress permission error messages. Errors from \fBdu\fR(1) are
@@ -36,11 +43,14 @@ Display version information and exit.
 .B 0
 Success.
 .TP
-.B 1
-Error (invalid directory, read failure, temp file error).
-.TP
 .B 2
-Too many arguments provided.
+Usage error (too many arguments).
+.TP
+.B 3
+Directory not found.
+.TP
+.B 5
+I/O error: \fBdu\fR(1) returned no size for a directory that still exists.
 .TP
 .B 22
 Invalid command-line option.
@@ -95,10 +105,6 @@ Combine options:
 .RS
 .B dux -Lq /some/path
 .RE
-.SH FILES
-.B dux
-creates a temporary file using \fBmktemp\fR(1) for sorting purposes.
-The file is automatically cleaned up on exit or interrupt.
 .SH ENVIRONMENT
 .B dux
 sets a restricted PATH for security:
@@ -108,18 +114,29 @@ sets a restricted PATH for security:
 .RE
 .SH NOTES
 .B dux
-uses \fBdu \-sb\fR to calculate actual disk usage in bytes for each
-subdirectory. Permission errors are reported to stderr (unless \fB-q\fR
+uses GNU \fBdu \-sb\fR to calculate apparent size in bytes for each
+subdirectory, running one \fBdu\fR per directory in parallel (one job per
+CPU, via \fBxargs\fR(1)). A file hard-linked into several subdirectories
+is therefore counted in full for each of them. Permission errors are reported to stderr (unless \fB-q\fR
 is used) but do not stop execution; accessible content is still measured
 and displayed.
 .PP
+Sizes are apparent sizes (bytes of content, as \fBdu \-b\fR), not
+allocated disk blocks, so a sparse file counts at its full length.
+.PP
+A subdirectory that disappears between listing and sizing (a process
+directory under \fI/proc\fR, a temporary directory) is left out of the
+output; the error from \fBdu\fR still appears on stderr unless \fB-q\fR
+is used.
+.PP
 Empty directories show as 0.0B (just directory metadata).
 .PP
-The script handles SIGINT and SIGTERM signals gracefully, cleaning up
-temporary files before exit.
+Sizes always use a full stop as the decimal point, whatever the locale.
+.PP
+No temporary files are created; sizes are sorted and formatted in a pipeline.
 .SH LIMITATIONS
-Without the \fB-L\fR flag, symbolic links used as the starting directory
-may not work correctly due to how \fBfind\fR(1) handles symlinked paths.
+Output is one line per directory, so a directory name containing a newline
+is printed across two lines.
 .SH SEE ALSO
 .BR du (1),
 .BR df (1),

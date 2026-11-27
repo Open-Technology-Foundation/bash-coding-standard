@@ -1,0 +1,36 @@
+# Makefile - C reimplementations of trim utilities
+CC      ?= cc
+CFLAGS  ?= -O2 -std=c11 -Wall -Wextra -Wpedantic
+PREFIX  ?= /usr/local
+BINDIR  ?= $(PREFIX)/bin
+DESTDIR ?=
+
+BINS := ltrim rtrim trim squeeze trimall
+COMMON_OBJ := trim_common.o
+
+.PHONY: all install uninstall test clean help
+
+all: $(BINS)
+
+trim_common.o: trim_common.c trim_common.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BINS): %: %.c trim_common.h $(COMMON_OBJ)
+	$(CC) $(CFLAGS) -o $@ $< $(COMMON_OBJ)
+
+install: $(BINS)
+	install -d $(DESTDIR)$(BINDIR)
+	@for b in $(BINS); do install -m 755 $$b $(DESTDIR)$(BINDIR)/$$b; done
+
+uninstall:
+	@for b in $(BINS); do rm -f $(DESTDIR)$(BINDIR)/$$b; done
+
+test: $(BINS)
+	./tests/run-tests.sh
+
+clean:
+	rm -f $(BINS) $(COMMON_OBJ)
+
+help:
+	@echo 'Targets: all install uninstall test clean'
+	@echo 'Vars: PREFIX=$(PREFIX) BINDIR=$(BINDIR) CC=$(CC) CFLAGS=$(CFLAGS)'

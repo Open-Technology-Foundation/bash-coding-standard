@@ -29,10 +29,10 @@ start = time.perf_counter()
 time.sleep(1.5)  # Simulate work
 
 # Print elapsed time
-print(elapsed_time(start))  # Output: "01.500s"
+print(elapsed_time(start))  # Output: "1.500s"
 
 # Or with explicit start/end times
-print(elapsed_time(0, 3661.123))  # Output: "01h 01m 01.123s"
+print(elapsed_time(0, 3661.123))  # Output: "01h 01m 1.123s"
 ```
 
 ### Bash
@@ -42,7 +42,7 @@ Requires Bash 5.0+ (uses `$EPOCHREALTIME`).
 ```bash
 # As a script
 elapsed_time 0 3661.123           # Output: "01h 01m 1.123s"
-elapsed_time --version             # Output: "elapsed_time 1.1.0"
+elapsed_time --version             # Output: "elapsed_time 1.2.0"
 
 # As a sourced function
 source elapsed_time

@@ -3,7 +3,7 @@
 # Adapted from: /ai/scripts/Okusi/bash-coding-standard/tests/test-helpers.sh
 
 # Test counters
-declare -gi TESTS_RUN=0 TESTS_PASSED=0 TESTS_FAILED=0
+declare -gi TESTS_RUN=0 TESTS_PASSED=0 TESTS_FAILED=0 TESTS_WARNED=0
 declare -a FAILED_TESTS=()
 
 # Colors for output (BCS0105: check both stdout and stderr)
@@ -35,6 +35,7 @@ assert_equals() {
   fi
 }
 
+# Literal substring match: paths are full of regex metacharacters ('.', '(')
 assert_contains() {
   local -- haystack="$1"
   local -- needle="$2"
@@ -42,7 +43,7 @@ assert_contains() {
 
   TESTS_RUN+=1
 
-  if [[ $haystack =~ $needle ]]; then
+  if [[ $haystack == *"$needle"* ]]; then
     TESTS_PASSED+=1
     echo "${GREEN}✓${NC} $test_name"
     return 0
@@ -63,7 +64,7 @@ assert_not_contains() {
 
   TESTS_RUN+=1
 
-  if [[ ! $haystack =~ $needle ]]; then
+  if [[ $haystack != *"$needle"* ]]; then
     TESTS_PASSED+=1
     echo "${GREEN}✓${NC} $test_name"
     return 0
@@ -183,10 +184,11 @@ pass() {
   return 0
 }
 
+# A warning is neither a pass nor a failure: it is reported, never counted
+# towards Total or Passed, so a fallback branch cannot hide a broken check.
 warn() {
   local -- message="$*"
-  TESTS_RUN+=1
-  TESTS_PASSED+=1
+  TESTS_WARNED+=1
   echo "${YELLOW}⚠${NC} $message"
   return 0
 }
@@ -317,6 +319,7 @@ print_summary() {
   echo "  Total:  $TESTS_RUN"
   echo "  ${GREEN}Passed: $TESTS_PASSED${NC}"
   echo "  ${RED}Failed: $TESTS_FAILED${NC}"
+  echo "  ${YELLOW}Warnings: $TESTS_WARNED${NC}"
 
   if ((TESTS_FAILED > 0)); then
     echo

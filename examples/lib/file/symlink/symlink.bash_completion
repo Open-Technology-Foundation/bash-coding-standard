@@ -23,6 +23,8 @@ _symlink() {
       --scan-symlink
       --delete-broken-symlinks
       --no-prompt
+      --force
+      --backup
       --list
       --dry-run
       --verbose
@@ -41,6 +43,8 @@ _symlink() {
       -S --scan-symlink
       -d --delete-broken-symlinks
       -P --no-prompt
+      -f --force
+      --backup
       -l --list
       -n --dry-run
       -v --verbose
@@ -59,7 +63,7 @@ _symlink() {
     case "${words[i]}" in
       -S|--scan-symlink) scan_mode=1 ;;
       -l|--list)         list_mode=1 ;;
-      -[tSdPlnvqVhD]*)
+      -[tSdPflnvqVhD]*)
         # Detect flags within combined short options (e.g. -SPd)
         if [[ "${words[i]}" == *S* ]]; then
           scan_mode=1

@@ -2,11 +2,14 @@
 # Main test runner for trim utilities
 
 set -euo pipefail
+shopt -s inherit_errexit nullglob
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
 # Script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+declare -- SCRIPT_DIR
+SCRIPT_DIR=$(realpath -- "$(dirname -- "${BASH_SOURCE[0]}")") \
+  || { >&2 echo "${0##*/}: ✗ cannot resolve test directory"; exit 1; }
 TEST_DIR="$SCRIPT_DIR"
-FIXTURES_DIR="$TEST_DIR/fixtures"
 UNIT_DIR="$TEST_DIR/unit"
 INTEGRATION_DIR="$TEST_DIR/integration"
 SECURITY_DIR="$TEST_DIR/security"
@@ -26,10 +29,10 @@ declare -i failed_tests=0
 # Function to run a test script
 run_test() {
   local -- test_script="$1"
-  local -- test_name
-  test_name="$(basename "$test_script" .sh)"
+  local -- test_name=${test_script##*/}
+  test_name=${test_name%.sh}
 
-  echo -e "${YELLOW}Running $test_name...${NC}"
+  >&2 echo -e "${YELLOW}Running $test_name...${NC}"
 
   # Run the test script and capture output and exit code
   if "$test_script"; then
@@ -37,7 +40,7 @@ run_test() {
     echo -e "${GREEN}✓ $test_name passed${NC}"
   else
     ((++failed_tests))
-    echo -e "${RED}✗ $test_name failed${NC}"
+    >&2 echo -e "${RED}✗ $test_name failed${NC}"
   fi
 
   ((++total_tests))
@@ -46,24 +49,26 @@ run_test() {
 
 # Run all unit tests
 run_unit_tests() {
-  echo -e "${YELLOW}Running unit tests...${NC}"
+  >&2 echo -e "${YELLOW}Running unit tests...${NC}"
+  local -- test
   for test in "$UNIT_DIR"/test-*.sh; do
     if [[ -x "$test" ]]; then
       run_test "$test"
     else
-      echo -e "${YELLOW}Warning: $test is not executable, skipping${NC}"
+      >&2 echo -e "${YELLOW}Warning: $test is not executable, skipping${NC}"
     fi
   done
 }
 
 # Run all integration tests
 run_integration_tests() {
-  echo -e "${YELLOW}Running integration tests...${NC}"
+  >&2 echo -e "${YELLOW}Running integration tests...${NC}"
+  local -- test
   for test in "$INTEGRATION_DIR"/test-*.sh; do
     if [[ -x "$test" ]]; then
       run_test "$test"
     else
-      echo -e "${YELLOW}Warning: $test is not executable, skipping${NC}"
+      >&2 echo -e "${YELLOW}Warning: $test is not executable, skipping${NC}"
     fi
   done
 }
@@ -71,12 +76,13 @@ run_integration_tests() {
 # Run all security tests
 run_security_tests() {
   if [[ -d "$SECURITY_DIR" ]]; then
-    echo -e "${YELLOW}Running security tests...${NC}"
+    >&2 echo -e "${YELLOW}Running security tests...${NC}"
+    local -- test
     for test in "$SECURITY_DIR"/test-*.sh; do
       if [[ -x "$test" ]]; then
         run_test "$test"
       else
-        echo -e "${YELLOW}Warning: $test is not executable, skipping${NC}"
+        >&2 echo -e "${YELLOW}Warning: $test is not executable, skipping${NC}"
       fi
     done
   fi
@@ -85,12 +91,13 @@ run_security_tests() {
 # Run all stress tests
 run_stress_tests() {
   if [[ -d "$STRESS_DIR" ]]; then
-    echo -e "${YELLOW}Running stress tests...${NC}"
+    >&2 echo -e "${YELLOW}Running stress tests...${NC}"
+    local -- test
     for test in "$STRESS_DIR"/test-*.sh; do
       if [[ -x "$test" ]]; then
         run_test "$test"
       else
-        echo -e "${YELLOW}Warning: $test is not executable, skipping${NC}"
+        >&2 echo -e "${YELLOW}Warning: $test is not executable, skipping${NC}"
       fi
     done
   fi
@@ -119,7 +126,7 @@ print_summary() {
 }
 
 # Process command line arguments
-if [[ $# -eq 0 ]]; then
+if (($# == 0)); then
   run_all_tests
 else
   case "$1" in
@@ -136,9 +143,9 @@ else
       run_stress_tests
       ;;
     *)
-      echo "Unknown test category: $1"
-      echo "Usage: $0 [unit|integration|security|stress]"
-      exit 1
+      >&2 echo "${0##*/}: ✗ Unknown test category ${1@Q}"
+      >&2 echo "Usage: ${0##*/} [unit|integration|security|stress]"
+      exit 22
       ;;
   esac
 fi

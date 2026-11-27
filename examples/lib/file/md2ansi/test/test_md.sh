@@ -5,14 +5,14 @@
 test_section "md (pagination wrapper)"
 
 # --------------------------------------------------------------------------------
-# Version / help propagation from md2ansi
+# Version / help: md answers these itself rather than passing them to md2ansi
 
 output=$(./md --version 2>&1)
-assert_contains "$output" "1.0.1" "md --version propagates md2ansi version"
+assert_equals "md 1.0.0" "$output" "md --version reports the wrapper's own version"
 assert_exit_code 0 "./md --version" "md --version exits 0"
 
 output=$(./md --help 2>&1)
-assert_contains "$output" "Usage" "md --help propagates md2ansi help"
+assert_contains "$output" "Wrapper for md2ansi" "md --help shows the wrapper's own usage"
 assert_exit_code 0 "./md --help" "md --help exits 0"
 
 # --------------------------------------------------------------------------------

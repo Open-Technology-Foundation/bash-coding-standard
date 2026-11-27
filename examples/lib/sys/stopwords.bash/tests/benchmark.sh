@@ -2,9 +2,11 @@
 # Performance benchmark: Bash vs Python stopwords implementation
 set -euo pipefail
 shopt -s inherit_errexit shift_verbose extglob nullglob
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
-# Script metadata
-SCRIPT_PATH=$(readlink -en -- "${BASH_SOURCE[0]}")
+# Script metadata (error() is not defined yet, so the failure message is inline)
+SCRIPT_PATH=$(readlink -en -- "${BASH_SOURCE[0]}") \
+  || { >&2 echo 'benchmark.sh: cannot resolve script path'; exit 1; }
 SCRIPT_NAME=${SCRIPT_PATH##*/}
 SCRIPT_DIR=${SCRIPT_PATH%/*}
 LIB_DIR=${SCRIPT_DIR%/*}
@@ -17,8 +19,24 @@ readonly BLUE='\033[0;34m'
 readonly NC='\033[0m' # No Color
 
 # Source the bash stopwords function
+# error() is not defined yet, so the failure messages are inline
+declare -r STOPWORDS_LIB="$LIB_DIR"/stopwords
+[[ -f $STOPWORDS_LIB ]] \
+  || { >&2 echo "$SCRIPT_NAME: missing library ${STOPWORDS_LIB@Q}"; exit 3; }
 # shellcheck source=/dev/null
-source "$LIB_DIR/stopwords"
+source -- "$STOPWORDS_LIB" \
+  || { >&2 echo "$SCRIPT_NAME: cannot source ${STOPWORDS_LIB@Q}"; exit 1; }
+
+# Temporary test files; the trap is set before mktemp runs, and cleanup()
+# reads a global because main()'s locals are gone when the EXIT trap fires
+declare -- TEMP_DIR=''
+cleanup() {
+  local -i exitcode=${1:-$?}
+  trap - EXIT
+  [[ -z $TEMP_DIR ]] || rm -rf -- "$TEMP_DIR"
+  exit "$exitcode"
+}
+trap 'cleanup $?' EXIT
 
 # Error message to stderr
 error() {
@@ -70,18 +88,20 @@ benchmark_bash() {
   local -i iterations=$2
 
   local -i start end elapsed
-  start=$(date +%s%N)
+  # EPOCHREALTIME has six decimal places: its digits are microseconds
+  start=${EPOCHREALTIME//[!0-9]/}
 
   local -i i
   for ((i=0; i<iterations; i+=1)); do
-    stopwords < "$test_file" > /dev/null
+    # Called as $(...) || ..., where set -e is off: check each run explicitly
+    stopwords < "$test_file" > /dev/null || return
   done
 
-  end=$(date +%s%N)
+  end=${EPOCHREALTIME//[!0-9]/}
   elapsed=$((end - start))
 
-  # Convert to milliseconds
-  printf '%d' $((elapsed / 1000000))
+  # Microseconds to milliseconds
+  printf '%d' $((elapsed / 1000))
 }
 
 # Benchmark python implementation
@@ -90,18 +110,19 @@ benchmark_python() {
   local -i iterations=$2
 
   local -i start end elapsed
-  start=$(date +%s%N)
+  # EPOCHREALTIME has six decimal places: its digits are microseconds
+  start=${EPOCHREALTIME//[!0-9]/}
 
   local -i i
   for ((i=0; i<iterations; i+=1)); do
-    python3 "$SCRIPT_DIR/stopwords_python.py" < "$test_file" > /dev/null
+    python3 -- "$SCRIPT_DIR/stopwords_python.py" < "$test_file" > /dev/null || return
   done
 
-  end=$(date +%s%N)
+  end=${EPOCHREALTIME//[!0-9]/}
   elapsed=$((end - start))
 
-  # Convert to milliseconds
-  printf '%d' $((elapsed / 1000000))
+  # Microseconds to milliseconds
+  printf '%d' $((elapsed / 1000))
 }
 
 # Main benchmark
@@ -113,27 +134,26 @@ main() {
   local -a test_sizes=(100 500 1000 2000 5000 10000)
   local -i iterations=10
 
-  # Create temporary directory for test files
-  local -- temp_dir
-  temp_dir=$(mktemp -d)
-  trap 'rm -rf "$temp_dir"' EXIT
+  TEMP_DIR=$(mktemp -d) || { error 'Cannot create a temporary directory'; return 1; }
 
   printf "%-15s %-15s %-15s %-15s %-10s\n" \
     "Test Size" "Bash (ms)" "Python (ms)" "Difference" "Winner"
   printf "%s\n" "--------------------------------------------------------------------------------"
 
   local -i test_size bash_time python_time diff
-  local -- winner diff_str
+  local -- winner diff_str test_file
 
   for test_size in "${test_sizes[@]}"; do
-    local -- test_file="$temp_dir/test_${test_size}.txt"
+    test_file="$TEMP_DIR/test_${test_size}.txt"
 
     # Generate test data
     generate_test_data "$test_size" "$test_file"
 
     # Run benchmarks
-    bash_time=$(benchmark_bash "$test_file" "$iterations")
-    python_time=$(benchmark_python "$test_file" "$iterations")
+    bash_time=$(benchmark_bash "$test_file" "$iterations") \
+      || { error "Bash benchmark failed at $test_size words"; return 1; }
+    python_time=$(benchmark_python "$test_file" "$iterations") \
+      || { error "Python benchmark failed at $test_size words"; return 1; }
 
     # Calculate difference
     diff=$((bash_time - python_time))
@@ -163,7 +183,8 @@ main() {
   printf "  Python version: %s\n" "$(python3 --version 2>&1 | cut -d' ' -f2)"
   printf "  Bash version: %s\n" "$BASH_VERSION"
   echo ""
-  print_result "Benchmark complete!"
+  # A status line, not part of the report
+  >&2 print_result 'Benchmark complete!'
 }
 
 main "$@"

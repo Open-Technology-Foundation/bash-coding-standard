@@ -58,7 +58,7 @@ output=$(echo -e '```\necho -e "\x1b[31mred\x1b[0m"\n```' | ./md2ansi)
 assert_contains "$output" "echo" "ANSI codes in code blocks handled"
 
 # --------------------------------------------------------------------------------
-# ReDoS protection (timeout command wrapper)
+# Pathological regex input (no timeout guards the patterns, so these must finish)
 
 # Complex nested formatting that could cause ReDoS
 output=$(echo "**bold *italic **nested** more* end**" | ./md2ansi 2>&1)

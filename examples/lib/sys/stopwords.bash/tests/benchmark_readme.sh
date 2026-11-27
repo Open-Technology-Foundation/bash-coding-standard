@@ -2,9 +2,11 @@
 # Performance benchmark using README.md as real-world input
 set -euo pipefail
 shopt -s inherit_errexit shift_verbose extglob nullglob
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
-# Script metadata
-SCRIPT_PATH=$(readlink -en -- "${BASH_SOURCE[0]}")
+# Script metadata (error() is not defined yet, so the failure message is inline)
+SCRIPT_PATH=$(readlink -en -- "${BASH_SOURCE[0]}") \
+  || { >&2 echo 'benchmark_readme.sh: cannot resolve script path'; exit 1; }
 SCRIPT_NAME=${SCRIPT_PATH##*/}
 SCRIPT_DIR=${SCRIPT_PATH%/*}
 LIB_DIR=${SCRIPT_DIR%/*}
@@ -17,8 +19,13 @@ readonly BLUE='\033[0;34m'
 readonly NC='\033[0m' # No Color
 
 # Source the bash stopwords function
+# error() is not defined yet, so the failure messages are inline
+declare -r STOPWORDS_LIB="$LIB_DIR"/stopwords
+[[ -f $STOPWORDS_LIB ]] \
+  || { >&2 echo "$SCRIPT_NAME: missing library ${STOPWORDS_LIB@Q}"; exit 3; }
 # shellcheck source=/dev/null
-source "$LIB_DIR/stopwords"
+source -- "$STOPWORDS_LIB" \
+  || { >&2 echo "$SCRIPT_NAME: cannot source ${STOPWORDS_LIB@Q}"; exit 1; }
 
 # Error message to stderr
 error() {
@@ -43,18 +50,20 @@ benchmark_bash() {
   local -i iterations=$2
 
   local -i start end elapsed
-  start=$(date +%s%N)
+  # EPOCHREALTIME has six decimal places: its digits are microseconds
+  start=${EPOCHREALTIME//[!0-9]/}
 
   local -i i
   for ((i=0; i<iterations; i+=1)); do
-    stopwords < "$test_file" > /dev/null
+    # Called as $(...) || ..., where set -e is off: check each run explicitly
+    stopwords < "$test_file" > /dev/null || return
   done
 
-  end=$(date +%s%N)
+  end=${EPOCHREALTIME//[!0-9]/}
   elapsed=$((end - start))
 
-  # Convert to milliseconds
-  printf '%d' $((elapsed / 1000000))
+  # Microseconds to milliseconds
+  printf '%d' $((elapsed / 1000))
 }
 
 # Benchmark python implementation
@@ -63,18 +72,19 @@ benchmark_python() {
   local -i iterations=$2
 
   local -i start end elapsed
-  start=$(date +%s%N)
+  # EPOCHREALTIME has six decimal places: its digits are microseconds
+  start=${EPOCHREALTIME//[!0-9]/}
 
   local -i i
   for ((i=0; i<iterations; i+=1)); do
-    python3 "$SCRIPT_DIR/stopwords_python.py" < "$test_file" > /dev/null
+    python3 -- "$SCRIPT_DIR/stopwords_python.py" < "$test_file" > /dev/null || return
   done
 
-  end=$(date +%s%N)
+  end=${EPOCHREALTIME//[!0-9]/}
   elapsed=$((end - start))
 
-  # Convert to milliseconds
-  printf '%d' $((elapsed / 1000000))
+  # Microseconds to milliseconds
+  printf '%d' $((elapsed / 1000))
 }
 
 # Main benchmark
@@ -90,12 +100,14 @@ main() {
   echo ""
 
   # File info
-  local -i word_count line_count
-  word_count=$(wc -w < "$readme_file")
-  line_count=$(wc -l < "$readme_file")
+  local -- counts
+  local -i line_count word_count byte_count
+  # wc prints lines, words and bytes in that order, whatever the flag order
+  counts=$(wc -lwc < "$readme_file") || { error "Cannot read ${readme_file@Q}"; return 1; }
+  read -r line_count word_count byte_count <<< "$counts"
 
   printf "Input file: %s\n" "$readme_file"
-  printf "File size: %s bytes\n" "$(wc -c < "$readme_file")"
+  printf "File size: %d bytes\n" "$byte_count"
   printf "Word count: %d words\n" "$word_count"
   printf "Line count: %d lines\n" "$line_count"
   echo ""
@@ -111,8 +123,10 @@ main() {
   local -- winner diff_str
 
   # Run benchmarks
-  bash_time=$(benchmark_bash "$readme_file" "$iterations")
-  python_time=$(benchmark_python "$readme_file" "$iterations")
+  bash_time=$(benchmark_bash "$readme_file" "$iterations") \
+    || { error 'Bash benchmark failed'; return 1; }
+  python_time=$(benchmark_python "$readme_file" "$iterations") \
+    || { error 'Python benchmark failed'; return 1; }
 
   # Calculate difference
   diff=$((bash_time - python_time))
@@ -151,7 +165,8 @@ main() {
   printf "  Python version: %s\n" "$(python3 --version 2>&1 | cut -d' ' -f2)"
   printf "  Bash version: %s\n" "$BASH_VERSION"
   echo ""
-  print_result "Benchmark complete!"
+  # A status line, not part of the report
+  >&2 print_result 'Benchmark complete!'
 }
 
 main "$@"

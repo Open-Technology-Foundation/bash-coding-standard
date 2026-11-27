@@ -178,6 +178,12 @@ test_section 'Reinstallation'
 # Test: Reinstall over existing files works
 output=$("$INSTALL" 2>&1); ec=$?
 assert_exit_code 0 "$ec" 'Reinstall exits 0'
+assert_contains "$output" 'is not in PATH' 'Warns when the bin directory is not in PATH'
+
+# Test: No PATH warning when the bin directory is already in the caller's PATH
+output=$(PATH="$TEST_BIN:$PATH" "$INSTALL" 2>&1); ec=$?
+assert_exit_code 0 "$ec" 'Reinstall with bin directory in PATH exits 0'
+assert_not_contains "$output" 'is not in PATH' 'No PATH warning when bin directory is in PATH'
 assert_file_exists "$TEST_BIN"/dir-sizes 'dir-sizes still exists after reinstall'
 assert_symlink "$TEST_BIN"/dux dir-sizes 'dux symlink still correct after reinstall'
 
@@ -229,6 +235,21 @@ assert_file_exists "$TEST_BIN"/dir-sizes "-u -n doesn't actually remove files"
 
 # Clean up for next test
 "$INSTALL" --uninstall >/dev/null 2>&1 ||:
+
+test_section 'Bash Completion'
+
+# Test: Completion is registered with -o filenames, so readline escapes
+# spaces in directory names and appends '/' to completed directories
+declare -- name
+for name in dux dir-sizes; do
+  output=$(bash -c 'source -- "$1"; complete -p "$2"' _ "$SCRIPT_DIR"/../dux.bash_completion "$name" 2>&1)
+  assert_contains "$output" '-o filenames' "$name completion uses -o filenames"
+done
+
+# Test: Option completion offers -x and its long form
+output=$(bash -c 'source -- "$1"; COMP_WORDS=(dux --o); COMP_CWORD=1; _dux
+  printf "%s\n" "${COMPREPLY[@]}"' _ "$SCRIPT_DIR"/../dux.bash_completion 2>&1)
+assert_contains "$output" '--one-file-system' 'Completion offers --one-file-system'
 
 print_summary
 exit $?

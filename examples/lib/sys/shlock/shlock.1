@@ -14,7 +14,7 @@
 . ftr VB CB
 . ftr VBI CBI
 .\}
-.TH "SHLOCK" "1" "April 2026" "shlock 2.0.1" ""
+.TH "SHLOCK" "1" "November 2026" "shlock 2.0.2" ""
 .hy
 .SH NAME
 .PP
@@ -95,11 +95,14 @@ Works independently; does not require \f[B]\[en]wait\f[R].
 .TP
 \f[B]-s\f[R], \f[B]\[en]steal\f[R]
 Forcefully remove an existing lock.
-If the lock holder process is dead, the lock is removed automatically
-without prompting.
-If the holder is still running, displays a warning and prompts for
-confirmation before stealing.
+If no process holds the lock (its holder died), the lock is removed
+automatically without prompting.
+If the holder is alive (its recorded PID is running, or the lock is held
+even though the PID file is missing, unreadable or stale), displays a
+warning and prompts for confirmation before stealing.
 Exits with code 1 if the user declines.
+Without a terminal the prompt reads end-of-file and declines, so a held
+lock is never stolen unattended.
 .TP
 \f[B]-h\f[R], \f[B]\[en]help\f[R]
 Display help message and exit.
@@ -132,8 +135,9 @@ The lock is released on exit (fd 200 closes); any partial state is
 cleaned up by the EXIT trap.
 .TP
 \f[B]13\f[R]
-Permission denied (no writable lock directory in \f[V]/run/lock\f[R],
-\f[V]/var/lock\f[R], or \f[V]/tmp/locks\f[R]).
+Permission denied: no writable lock directory in \f[V]/run/lock\f[R],
+\f[V]/var/lock\f[R], or \f[V]/tmp/locks\f[R], or the lock file cannot be
+opened (e.g.\ another user\[cq]s lock file).
 .TP
 \f[B]22\f[R]
 Invalid argument (unknown option, bad \f[I]LOCKNAME\f[R], non-numeric
@@ -308,9 +312,10 @@ shlock -st 30 backup -- /usr/local/bin/backup.sh
 \f[R]
 .fi
 .PP
-If the lock holder is dead, the lock is removed automatically.
-If the holder is still running, \f[B]shlock\f[R] displays a warning and
-prompts for confirmation.
+If no process holds the lock, it is removed automatically.
+If the holder is alive (by its recorded PID or, when the PID file is
+missing or stale, by a \f[B]flock\f[R] probe), \f[B]shlock\f[R] displays
+a warning and prompts for confirmation.
 .SS Error Handling in Scripts
 .PP
 Distinguish between locked and failed:
@@ -325,7 +330,7 @@ if ! shlock myapp -- /path/to/command; then
     1)  echo \[dq]Already running, skipping...\[dq] >&2; exit 0 ;;
     2)  echo \[dq]Usage error\[dq] >&2; exit 2 ;;
     5)  echo \[dq]I/O error writing PID file\[dq] >&2; exit 5 ;;
-    13) echo \[dq]No writable lock directory\[dq] >&2; exit 13 ;;
+    13) echo \[dq]Lock directory or lock file not writable\[dq] >&2; exit 13 ;;
     22) echo \[dq]Invalid argument\[dq] >&2; exit 22 ;;
     24) echo \[dq]Timeout waiting for lock\[dq] >&2; exit 24 ;;
     *)  rc=$?; echo \[dq]Command failed with exit code $rc\[dq] >&2; exit \[dq]$rc\[dq] ;;
@@ -360,11 +365,11 @@ or derives from \f[I]COMMAND\f[R] basename
 \f[B]Lock directory determination\f[R]: Selects first writable directory
 from \f[V]/run/lock\f[R], \f[V]/var/lock\f[R], \f[V]/tmp/locks\f[R]
 .IP "3." 3
-\f[B]Stale lock check\f[R]: Validates lock age and process liveness,
-removes stale locks
-.IP "4." 3
 \f[B]Lock stealing\f[R] (if \f[B]\[en]steal\f[R]): Removes existing
-lock, prompting only if holder is still running
+lock, prompting only if the holder is alive
+.IP "4." 3
+\f[B]Stale lock check\f[R]: Validates lock age and holder liveness,
+removes stale locks no process holds
 .IP "5." 3
 \f[B]Lock acquisition\f[R]: Opens file descriptor 200 on
 \f[V]<LOCK_DIR>/<LOCKNAME>.lock\f[R] and attempts \f[B]flock\f[R](1)
@@ -375,8 +380,8 @@ lock, prompting only if holder is still running
 \f[B]Command execution\f[R]: Runs \f[I]COMMAND\f[R] while holding lock,
 captures exit code
 .IP "8." 3
-\f[B]Cleanup\f[R]: EXIT trap removes PID file, \f[B]flock\f[R] releases
-when fd closes
+\f[B]Cleanup\f[R]: EXIT trap removes the PID file if it records this
+process, \f[B]flock\f[R] releases when fd closes
 .SS File Descriptor 200
 .PP
 \f[B]shlock\f[R] uses file descriptor 200 for lock file operations.
@@ -405,11 +410,21 @@ Reduces filesystem operations
 Enables atomic lock semantics
 .PP
 The PID file (\f[V]<LOCK_DIR>/<LOCKNAME>.pid\f[R]) is temporary and
-removed by the EXIT trap when the process terminates.
+removed by the EXIT trap of the process that wrote it.
+A contender that fails to acquire the lock leaves the holder\[cq]s PID
+file alone, so stale-lock and \f[B]\[en]steal\f[R] checks can still see
+a live holder.
 .SS Stale Lock Detection Algorithm
 .PP
 Before attempting to acquire the lock, \f[B]shlock\f[R] examines the
-existing lock file and applies one of two cleanup paths:
+existing lock file and applies one of two cleanup paths.
+The holder counts as alive if the recorded PID is running
+(\f[V]kill -0 <PID>\f[R] succeeds) or if a non-blocking \f[B]flock\f[R]
+probe finds the lock held.
+The PID file can be missing, unreadable or stale while its holder still
+runs, so no lock file is removed on its word alone.
+The probe opens the file read-only, leaving its mtime unchanged, and
+treats a file it cannot open as held.
 .IP "1." 3
 Check if lock file exists; read modification time (mtime).
 .IP "2." 3
@@ -420,24 +435,37 @@ integer).
 (converted to seconds):
 .RS 4
 .IP \[bu] 2
-If process is dead (\f[V]kill -0 <PID>\f[R] fails): remove both
-\f[B].lock\f[R] and \f[B].pid\f[R] files.
+If the holder is dead: remove both \f[B].lock\f[R] and \f[B].pid\f[R]
+files.
 .IP \[bu] 2
-If process is alive: exit with code 1 (lock held by long-running
+If the holder is alive: exit with code 1 (lock held by long-running
 process).
 .RE
 .IP "4." 3
-\f[B]Holder-based path\f[R] \[em] if age ≤ \f[B]\[en]max-age\f[R] but
-the holder PID is no longer running:
+\f[B]Holder-based path\f[R] \[em] if age ≤ \f[B]\[en]max-age\f[R], the
+holder PID is no longer running and the lock is not held:
 .RS 4
 .IP \[bu] 2
 Remove both \f[B].lock\f[R] and \f[B].pid\f[R] files, log a warning, and
 proceed.
+.IP \[bu] 2
+If the lock is held after all (stale PID file), nothing is removed:
+acquisition reports the lock as held, or waits for it.
 .RE
 .PP
 This ensures crashed processes don\[cq]t block future executions
 (regardless of crash age), while still respecting legitimately
 long-running processes that exceed \f[B]\[en]max-age\f[R].
+.PP
+The lock is held through file descriptor 200, which \f[I]COMMAND\f[R]
+inherits, as with \f[B]flock\f[R](1).
+If \f[B]shlock\f[R] itself is killed (SIGKILL) while \f[I]COMMAND\f[R]
+keeps running, or \f[I]COMMAND\f[R] leaves a background process holding
+the descriptor, the lock stays held until those processes exit: later
+runs report it as held, past \f[B]\[en]max-age\f[R] too, rather than
+starting alongside them.
+Close fd 200 (\f[V]200>&-\f[R]) in background processes that should not
+keep the lock.
 .SS Waiting Modes
 .PP
 Three distinct locking modes are supported:
@@ -553,7 +581,7 @@ Lock Directory Selection below).
 .TP
 \f[V]<LOCK_DIR>/<LOCKNAME>.pid\f[R]
 PID file containing process ID of lock holder.
-Removed by EXIT trap.
+Removed by the holder\[cq]s EXIT trap.
 Used for informational error messages and stale lock validation.
 .SS Lock Directory Selection
 .PP
@@ -594,8 +622,10 @@ exit, signal, or crash).
 For very long-running commands, consider adjusting
 \f[B]\[en]max-age\f[R] to prevent premature stale lock detection.
 .IP \[bu] 2
-PID reuse is possible but extremely rare; stale lock detection validates
-process identity.
+PID reuse is possible but rare.
+It can only make a dead holder look alive, so \f[B]shlock\f[R] refuses
+or prompts instead of removing the lock; a live holder never looks dead,
+because the \f[B]flock\f[R] probe overrides the PID file.
 .SH BUGS
 .PP
 No known bugs.

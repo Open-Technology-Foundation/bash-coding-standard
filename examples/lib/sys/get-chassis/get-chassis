@@ -18,8 +18,11 @@ get_chassis() {
       [30]=tablet [31]=convertible [32]=detachable [33]=iot-gateway
       [34]=embedded-pc [35]=mini-pc [36]=stick-pc
     )
-    local -i code
-    code=$(< /sys/class/dmi/id/chassis_type)
+    local -- code=''
+    code=$(< /sys/class/dmi/id/chassis_type) ||:
+    # Firmware-sourced value: validate before the array index evaluates it as
+    # arithmetic. No leading zero, which arithmetic would read as octal.
+    [[ $code =~ ^[1-9][0-9]*$ ]] || code=2
     chassis=${chassis_map[code]:-unknown}
   fi
 
@@ -42,8 +45,9 @@ get_chassis() {
 # -- Run as script --
 set -euo pipefail
 shopt -s inherit_errexit
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
-declare -- SCRIPT_NAME=${0##*/} VERSION='1.0.0'
+declare -- SCRIPT_NAME=${0##*/} VERSION='1.0.1'
 
 show_help() {
   cat <<HELP
@@ -61,6 +65,7 @@ chassis_type code in /sys/class/dmi/id/chassis_type.
 Options:
   -V, --version           Show version
   -h, --help              Show this help
+  --                      End of options; remaining arguments are TYPEs
 
 Valid chassis types:
   other, unknown, desktop, low-profile-desktop, pizza-box,
@@ -82,14 +87,15 @@ Depends: jq
 HELP
 }
 
-if (($#)); then
-  case $1 in
-    -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
-    -h|--help)    show_help; exit 0 ;;
-    -*)           >&2 echo "$SCRIPT_NAME: unknown option: ${1@Q}"
-                  exit 1 ;;
-  esac
-fi
+declare -a TYPES=()
+while (($#)); do case $1 in
+  -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
+  -h|--help)    show_help; exit 0 ;;
+  --)           shift; TYPES+=("$@"); break ;;
+  -*)           >&2 echo "$SCRIPT_NAME: unknown option: ${1@Q}"
+                exit 1 ;;
+  *)            TYPES+=("$1") ;;
+esac; shift; done
 
-get_chassis "$@"
+get_chassis "${TYPES[@]}"
 #fin

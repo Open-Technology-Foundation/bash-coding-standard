@@ -86,7 +86,7 @@ assert_exit_code 0 "./md2ansi --version" "Version flag works"
 assert_exit_code 0 "./md2ansi --help" "Help flag works"
 
 output=$(./md2ansi --version)
-assert_contains "$output" "1.0.1" "Version string correct"
+assert_contains "$output" "1.0.2" "Version string correct"
 
 # --------------------------------------------------------------------------------
 # File processing

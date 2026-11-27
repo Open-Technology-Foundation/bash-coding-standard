@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#shellcheck disable=SC2016  # the bash -c bodies are code for the child shell; their $vars must not expand here
 # Benchmark: trim command substitution vs trimv in-place assignment
 #
 # Compares performance of:
@@ -6,16 +7,24 @@
 #   2. trimv -n var        - In-place variable assignment (no subshell)
 
 set -euo pipefail
+shopt -s inherit_errexit
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
+
+die() { (($# < 2)) || >&2 echo "${0##*/}: ✗ ${*:2}"; exit "${1:-0}"; }
 
 # Test directory
-TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$TEST_DIR/.." && pwd)"
+declare -- TEST_DIR ROOT_DIR
+TEST_DIR=$(realpath -- "$(dirname -- "${BASH_SOURCE[0]}")") \
+  || die 1 'cannot resolve test directory'
+ROOT_DIR=${TEST_DIR%/*}  # test -> project root
 
 # Source the utilities
-# shellcheck disable=SC1091
-source "$ROOT_DIR/trim.bash"
-# shellcheck disable=SC1091
-source "$ROOT_DIR/trimv.bash"
+declare -- lib
+for lib in trim trimv; do
+  [[ -f $ROOT_DIR/$lib.bash ]] || die 3 "missing $lib.bash"
+  #shellcheck disable=SC1090  # path is built from the loop variable; each utility is linted on its own
+  source -- "$ROOT_DIR/$lib".bash || die 1 "cannot source $lib.bash"
+done
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -26,7 +35,7 @@ NC='\033[0m'
 
 # Verify timer command exists
 if ! command -v timer &>/dev/null; then
-  echo "Error: 'timer' command not found. Please install it first." >&2
+  >&2 echo "Error: 'timer' command not found. Please install it first."
   exit 1
 fi
 
@@ -35,7 +44,7 @@ echo -e "${YELLOW}Comparing: var=\$(trim \"\$var\") vs trimv -n var${NC}"
 echo ""
 
 # Test correctness first
-echo -e "${YELLOW}Verifying correctness...${NC}"
+>&2 echo -e "${YELLOW}Verifying correctness...${NC}"
 
 test_cases=(
   "hello world"
@@ -49,16 +58,16 @@ test_cases=(
 declare -i all_correct=1
 for test in "${test_cases[@]}"; do
   # Test trim command substitution
-  result1=$(trim "$test")
+  result1=$(trim "$test") || die 1 "trim failed on ${test@Q}"
 
   # Test trimv in-place
-  trimv -n result2 "$test"
+  trimv -n result2 "$test" || die 1 "trimv failed on ${test@Q}"
 
   if [[ "$result1" != "$result2" ]]; then
-    echo -e "${YELLOW}Mismatch found:${NC}"
-    echo "  Input:     '$test'"
-    echo "  trim:      '$result1'"
-    echo "  trimv:     '$result2'"
+    >&2 echo -e "${YELLOW}Mismatch found:${NC}"
+    >&2 echo "  Input:     '$test'"
+    >&2 echo "  trim:      '$result1'"
+    >&2 echo "  trimv:     '$result2'"
     all_correct=0
   fi
 done
@@ -66,13 +75,13 @@ done
 if ((all_correct)); then
   echo -e "${GREEN}✓ All test cases produce identical results${NC}"
 else
-  echo -e "${YELLOW}⚠ Differences detected - see above${NC}"
+  >&2 echo -e "${YELLOW}⚠ Differences detected - see above${NC}"
   exit 1
 fi
 echo ""
 
 # Benchmark different patterns
-echo -e "${BOLD}${CYAN}Running benchmarks with timer -f...${NC}"
+>&2 echo -e "${BOLD}${CYAN}Running benchmarks with timer -f...${NC}"
 echo ""
 
 # Pattern 1: Short string, minimal whitespace
@@ -86,7 +95,7 @@ result1=$(timer -f bash -c '
     var="  hello world  "
     var=$(trim "$var")
   done
-' 2>&1 | grep "timer:" | sed 's/# timer: //')
+' 2>&1 | grep "timer:" | sed 's/# timer: //') || die 1 'timer run failed or printed no timer: line'
 
 result2=$(timer -f bash -c '
   source '"$ROOT_DIR"'/trimv.bash
@@ -94,7 +103,7 @@ result2=$(timer -f bash -c '
     var="  hello world  "
     trimv -n var "$var"
   done
-' 2>&1 | grep "timer:" | sed 's/# timer: //')
+' 2>&1 | grep "timer:" | sed 's/# timer: //') || die 1 'timer run failed or printed no timer: line'
 
 printf "  %-30s %s\n" "trim command substitution:" "$result1"
 printf "  %-30s %s\n" "trimv in-place:" "$result2"
@@ -111,7 +120,7 @@ result1=$(timer -f bash -c '
     var=$'\''\t\t  The quick brown fox jumps over the lazy dog  \t\t'\''
     var=$(trim "$var")
   done
-' 2>&1 | grep "timer:" | sed 's/# timer: //')
+' 2>&1 | grep "timer:" | sed 's/# timer: //') || die 1 'timer run failed or printed no timer: line'
 
 result2=$(timer -f bash -c '
   source '"$ROOT_DIR"'/trimv.bash
@@ -119,7 +128,7 @@ result2=$(timer -f bash -c '
     var=$'\''\t\t  The quick brown fox jumps over the lazy dog  \t\t'\''
     trimv -n var "$var"
   done
-' 2>&1 | grep "timer:" | sed 's/# timer: //')
+' 2>&1 | grep "timer:" | sed 's/# timer: //') || die 1 'timer run failed or printed no timer: line'
 
 printf "  %-30s %s\n" "trim command substitution:" "$result1"
 printf "  %-30s %s\n" "trimv in-place:" "$result2"
@@ -136,7 +145,7 @@ result1=$(timer -f bash -c '
     var="          Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua          "
     var=$(trim "$var")
   done
-' 2>&1 | grep "timer:" | sed 's/# timer: //')
+' 2>&1 | grep "timer:" | sed 's/# timer: //') || die 1 'timer run failed or printed no timer: line'
 
 result2=$(timer -f bash -c '
   source '"$ROOT_DIR"'/trimv.bash
@@ -144,7 +153,7 @@ result2=$(timer -f bash -c '
     var="          Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua          "
     trimv -n var "$var"
   done
-' 2>&1 | grep "timer:" | sed 's/# timer: //')
+' 2>&1 | grep "timer:" | sed 's/# timer: //') || die 1 'timer run failed or printed no timer: line'
 
 printf "  %-30s %s\n" "trim command substitution:" "$result1"
 printf "  %-30s %s\n" "trimv in-place:" "$result2"
@@ -161,7 +170,7 @@ result1=$(timer -f bash -c '
     var="  2024-01-15 10:23:45.123 [INFO] User authentication successful  "
     var=$(trim "$var")
   done
-' 2>&1 | grep "timer:" | sed 's/# timer: //')
+' 2>&1 | grep "timer:" | sed 's/# timer: //') || die 1 'timer run failed or printed no timer: line'
 
 result2=$(timer -f bash -c '
   source '"$ROOT_DIR"'/trimv.bash
@@ -169,7 +178,7 @@ result2=$(timer -f bash -c '
     var="  2024-01-15 10:23:45.123 [INFO] User authentication successful  "
     trimv -n var "$var"
   done
-' 2>&1 | grep "timer:" | sed 's/# timer: //')
+' 2>&1 | grep "timer:" | sed 's/# timer: //') || die 1 'timer run failed or printed no timer: line'
 
 printf "  %-30s %s\n" "trim command substitution:" "$result1"
 printf "  %-30s %s\n" "trimv in-place:" "$result2"
@@ -186,7 +195,7 @@ result1=$(timer -f bash -c '
     var="  x  "
     var=$(trim "$var")
   done
-' 2>&1 | grep "timer:" | sed 's/# timer: //')
+' 2>&1 | grep "timer:" | sed 's/# timer: //') || die 1 'timer run failed or printed no timer: line'
 
 result2=$(timer -f bash -c '
   source '"$ROOT_DIR"'/trimv.bash
@@ -194,7 +203,7 @@ result2=$(timer -f bash -c '
     var="  x  "
     trimv -n var "$var"
   done
-' 2>&1 | grep "timer:" | sed 's/# timer: //')
+' 2>&1 | grep "timer:" | sed 's/# timer: //') || die 1 'timer run failed or printed no timer: line'
 
 printf "  %-30s %s\n" "trim command substitution:" "$result1"
 printf "  %-30s %s\n" "trimv in-place:" "$result2"
@@ -211,7 +220,7 @@ result1=$(timer -f bash -c '
     var="                    "
     var=$(trim "$var")
   done
-' 2>&1 | grep "timer:" | sed 's/# timer: //')
+' 2>&1 | grep "timer:" | sed 's/# timer: //') || die 1 'timer run failed or printed no timer: line'
 
 result2=$(timer -f bash -c '
   source '"$ROOT_DIR"'/trimv.bash
@@ -219,7 +228,7 @@ result2=$(timer -f bash -c '
     var="                    "
     trimv -n var "$var"
   done
-' 2>&1 | grep "timer:" | sed 's/# timer: //')
+' 2>&1 | grep "timer:" | sed 's/# timer: //') || die 1 'timer run failed or printed no timer: line'
 
 printf "  %-30s %s\n" "trim command substitution:" "$result1"
 printf "  %-30s %s\n" "trimv in-place:" "$result2"

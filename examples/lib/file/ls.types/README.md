@@ -40,6 +40,7 @@ ls.bash                   # Bash files in current dir
 ls.bash /ai/scripts       # Bash files in specified dir
 ls.bash /dir1 /dir2       # Search multiple directories
 ls.bash -d 2 .            # Depth 2 (recursive)
+ls.bash -3 .              # Depth 3, numeric shorthand for -d 3
 ls.bash -rl /ai/scripts   # Realpath + ls listing (clustered options)
 ls.bash -L /scripts       # Include symlinked files
 
@@ -51,9 +52,9 @@ ls.php /var/www           # PHP files
 
 | Option | Description |
 |--------|-------------|
-| `-d, --maxdepth N` | Max find depth (default: 1) |
+| `-d, --maxdepth N` | Max find depth (default: 1); `N` is always the next word (`-d 2`, `-rd 2`); `-N` shorthand also accepted |
 | `-r, --realpath` | Output absolute paths |
-| `-l, --ls` | Format as `ls -lhA --color=always` listing |
+| `-l, --ls` | Format as `ls -lhA --color=auto` listing (colour only on a terminal) |
 | `-L, --follow` | Follow symbolic links |
 | `--` | End of options |
 | `-E, --edit` | Interactive config editor |
@@ -80,12 +81,18 @@ ls.php:PHP:php:php
 - `shebang_pattern` - Substring fragment inserted into regex `^#!.*{pattern}` (not a full regex — do not include anchors)
 - `extensions` - Comma-separated file extensions (no dots)
 
-### Config Search Order (FHS-compliant)
+### Config Search Order
 
-1. `/etc/ls.types/types.conf`
-2. `/usr/local/share/ls.types/types.conf`
-3. `/usr/share/ls.types/types.conf`
-4. Script directory (development/fallback)
+The first readable file wins outright (no merging). `-h` prints this list and the file in use.
+
+1. `${XDG_CONFIG_HOME:-~/.config}/ls.types/types.conf` (per-user override)
+2. `/etc/ls.types/types.conf`
+3. `/usr/local/share/ls.types/types.conf`
+4. `/usr/share/ls.types/types.conf`
+5. Script directory (development/fallback)
+
+When `-E` creates a config file that does not exist yet, it seeds it with a copy of the
+config currently in use, so a new per-user file never starts empty and shadows the system one.
 
 ### Default Symlinks
 
@@ -180,8 +187,12 @@ ls.bash -S create /target # In specified directory
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Runtime failure (config not found, unknown symlink, invalid directory, symlink creation failed, unwritable config) |
-| 22 | Invalid option or argument (unknown option, missing or non-numeric `-d` value) |
+| 1 | Runtime failure (symlink creation failed, config file could not be created) |
+| 3 | Not found (no config file, DIR is not a directory, `-S create` target directory missing) |
+| 13 | Config file not writable (`-E`) |
+| 18 | `file(1)` not installed |
+| 19 | Symlink name not defined in the config in use |
+| 22 | Invalid option or argument (unknown option, missing or non-numeric `-d` value, unknown `-S` action, direct invocation with no or an unsupported option) |
 
 ## Requirements
 

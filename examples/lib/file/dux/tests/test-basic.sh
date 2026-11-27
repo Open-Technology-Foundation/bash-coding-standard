@@ -25,6 +25,8 @@ test_section 'Basic Functionality'
 output=$("$DUX" --help 2>&1); ec=$?
 assert_exit_code 0 "$ec" '--help exits 0'
 assert_contains "$output" 'Quick directory size overview' '--help shows description'
+assert_contains "$output" '--one-file-system' '--help documents -x/--one-file-system'
+assert_contains "$output" 'apparent size' '--help says sizes are apparent sizes'
 
 # Test: -h displays help and exits 0
 output=$("$DUX" -h 2>&1); ec=$?

@@ -1,25 +1,41 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2317  # Functions invoked indirectly via test framework
+# shellcheck disable=SC2317,SC2329  # Functions invoked indirectly via test framework
 # test-symlink - Comprehensive test suite for symlink script
 # Version: 1.0.0
 # License: GPL-3.0
 
 set -euo pipefail
 shopt -s inherit_errexit extglob nullglob
+# Runs as root: never trust the caller's PATH (same value as symlink itself)
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
 
 # Get script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) \
+  || { >&2 echo 'test-symlink: cannot determine script directory'; exit 1; }
 readonly SCRIPT_DIR
 
-# Source test framework and helpers
+# Source test framework and helpers (no die() exists yet, so exit directly)
+[[ -f ${SCRIPT_DIR}/test-harness && -f ${SCRIPT_DIR}/test-helpers ]] \
+  || { >&2 echo "test-symlink: test-harness/test-helpers not found in ${SCRIPT_DIR@Q}"; exit 3; }
 # shellcheck source=./test-harness
-source "${SCRIPT_DIR}/test-harness"
+source -- "${SCRIPT_DIR}/test-harness" \
+  || { >&2 echo 'test-symlink: failed to source test-harness'; exit 1; }
 # shellcheck source=./test-helpers
-source "${SCRIPT_DIR}/test-helpers"
+source -- "${SCRIPT_DIR}/test-helpers" \
+  || { >&2 echo 'test-symlink: failed to source test-helpers'; exit 1; }
 
 #━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Setup and Teardown
 #━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# must CMD... - Run a fixture step; on failure, fail the test naming the step.
+# run_test calls each test as an `if` condition, so errexit is suspended inside
+# tests and an unchecked step would fail silently. Use as: must CMD || return 1
+must() {
+  "$@" && return 0
+  fail "Fixture step failed: $*"
+  return 1
+}
 
 setup() {
   setup_test_env
@@ -35,26 +51,36 @@ teardown() {
 
 test_help_short() {
   run_symlink -h
-  assert_exit_code 0 echo "${TEST_EXIT_CODE}"
+  assert_equals 0 "${TEST_EXIT_CODE}"
   assert_contains "${TEST_OUTPUT}" "USAGE:"
 }
 
 test_help_long() {
   run_symlink --help
-  assert_exit_code 0 echo "${TEST_EXIT_CODE}"
+  assert_equals 0 "${TEST_EXIT_CODE}"
   assert_contains "${TEST_OUTPUT}" "USAGE:"
 }
 
 test_version_short() {
+  local -- expected
+  expected=$(sed -n -- 's/^declare -r VERSION=//p' "${SYMLINK_BIN}") \
+    || { fail 'Cannot read symlink source'; return 1; }
+  # Empty would make the assert_contains below pass vacuously
+  [[ -n ${expected} ]] || { fail 'No VERSION line found in symlink'; return 1; }
   run_symlink -V
-  assert_exit_code 0 echo "${TEST_EXIT_CODE}"
-  assert_contains "${TEST_OUTPUT}" "1.4.0"
+  assert_equals 0 "${TEST_EXIT_CODE}"
+  assert_contains "${TEST_OUTPUT}" "${expected}"
 }
 
 test_version_long() {
+  local -- expected
+  expected=$(sed -n -- 's/^declare -r VERSION=//p' "${SYMLINK_BIN}") \
+    || { fail 'Cannot read symlink source'; return 1; }
+  # Empty would make the assert_contains below pass vacuously
+  [[ -n ${expected} ]] || { fail 'No VERSION line found in symlink'; return 1; }
   run_symlink --version
-  assert_exit_code 0 echo "${TEST_EXIT_CODE}"
-  assert_contains "${TEST_OUTPUT}" "1.4.0"
+  assert_equals 0 "${TEST_EXIT_CODE}"
+  assert_contains "${TEST_OUTPUT}" "${expected}"
 }
 
 test_invalid_option() {
@@ -86,7 +112,7 @@ test_dry_run_long() {
 test_target_dir_short() {
   local -r test_script="${TEST_SOURCE_DIR}/test.sh"
   local -r custom_target="${TEST_ROOT}/custom-target"
-  mkdir -p "${custom_target}"
+  must mkdir -p -- "${custom_target}" || return 1
 
   create_mock_executable "${test_script}"
   run_symlink_sudo -t "${custom_target}" "${test_script}"
@@ -99,7 +125,7 @@ test_target_dir_short() {
 test_target_dir_long() {
   local -r test_script="${TEST_SOURCE_DIR}/test.sh"
   local -r custom_target="${TEST_ROOT}/custom-target"
-  mkdir -p "${custom_target}"
+  must mkdir -p -- "${custom_target}" || return 1
 
   create_mock_executable "${test_script}"
   run_symlink_sudo --target-dir "${custom_target}" "${test_script}"
@@ -113,9 +139,9 @@ test_verbose_short() {
 
   run_symlink_sudo -v -t "${TEST_TARGET_DIR}" "${test_script}"
 
-  # Verbose mode should show more output
-  # Check for typical verbose messages
-  assert_success echo "Verbose flag accepted"
+  # Verbose mode emits the per-file "Creating symlink" detail line
+  assert_contains "${TEST_OUTPUT}" "Creating symlink"
+  assert_symlink_to "${TEST_TARGET_DIR}/test.sh" "${test_script}"
 }
 
 test_quiet_short() {
@@ -124,8 +150,9 @@ test_quiet_short() {
 
   run_symlink_sudo -q -t "${TEST_TARGET_DIR}" "${test_script}"
 
-  # Quiet mode should suppress some output
-  assert_success echo "Quiet flag accepted"
+  # Quiet mode suppresses the per-file detail but still creates the link
+  assert_output_not_contains "Creating symlink"
+  assert_symlink_to "${TEST_TARGET_DIR}/test.sh" "${test_script}"
 }
 
 test_no_prompt_short() {
@@ -134,8 +161,9 @@ test_no_prompt_short() {
 
   run_symlink_sudo -P -t "${TEST_TARGET_DIR}" "${test_script}"
 
-  # Should not prompt for anything
-  assert_success echo "No-prompt flag accepted"
+  # No prompt string emitted, and the link is created without interaction
+  assert_output_not_contains "y/n"
+  assert_symlink_to "${TEST_TARGET_DIR}/test.sh" "${test_script}"
 }
 
 test_aggregated_short_options() {
@@ -157,7 +185,7 @@ test_list_mode() {
   run_symlink -l "${TEST_SOURCE_DIR}"
 
   assert_contains "${TEST_OUTPUT}" ".symlink"
-  assert_exit_code 0 echo "${TEST_EXIT_CODE}"
+  assert_equals 0 "${TEST_EXIT_CODE}"
 }
 
 test_scan_mode() {
@@ -174,14 +202,17 @@ test_scan_mode() {
 }
 
 test_delete_broken_symlinks_flag() {
-  # Create a broken symlink in target
+  local -r noop="${TEST_SOURCE_DIR}/noop.sh"
+  create_mock_executable "${noop}"
+
+  # Dry-run with -d must REPORT but NOT delete the broken symlink
   create_broken_symlink "${TEST_TARGET_DIR}/broken-link"
+  run_symlink_sudo -d -n -t "${TEST_TARGET_DIR}" "${noop}"
+  [[ -L "${TEST_TARGET_DIR}/broken-link" ]] || fail "dry-run -d deleted the broken symlink"
 
-  run_symlink_sudo -d -t "${TEST_TARGET_DIR}" -n /nonexistent 2>/dev/null || true
-
-  # In dry-run, should report but not delete
-  # Without dry-run, would delete
-  assert_success echo "Delete flag accepted"
+  # Real run with -d removes the broken symlink
+  run_symlink_sudo -d -t "${TEST_TARGET_DIR}" "${noop}"
+  [[ ! -L "${TEST_TARGET_DIR}/broken-link" ]] || fail "real -d did not delete the broken symlink"
 }
 
 test_no_args_shows_help() {
@@ -234,7 +265,7 @@ test_create_new_symlink() {
 
   assert_symlink_created "test.sh"
   assert_symlink_points_to "test.sh" "${test_script}"
-  assert_exit_code 0 echo "${TEST_EXIT_CODE}"
+  assert_equals 0 "${TEST_EXIT_CODE}"
 }
 
 test_create_symlink_with_custom_name() {
@@ -267,12 +298,12 @@ test_skip_existing_same_symlink() {
 test_replace_existing_different_symlink() {
   local -r test_script1="${TEST_SOURCE_DIR}/dir1/test.sh"
   local -r test_script2="${TEST_SOURCE_DIR}/dir2/test.sh"
-  mkdir -p "${TEST_SOURCE_DIR}/dir1" "${TEST_SOURCE_DIR}/dir2"
+  must mkdir -p -- "${TEST_SOURCE_DIR}/dir1" "${TEST_SOURCE_DIR}/dir2" || return 1
   create_mock_executable "${test_script1}"
   create_mock_executable "${test_script2}"
 
   # Create symlink to first script
-  ln -sf "${test_script1}" "${TEST_TARGET_DIR}/test.sh"
+  must ln -sf -- "${test_script1}" "${TEST_TARGET_DIR}/test.sh" || return 1
 
   # Replace with second script (same basename, no prompt)
   run_symlink_sudo -P -t "${TEST_TARGET_DIR}" "${test_script2}"
@@ -285,12 +316,44 @@ test_replace_existing_regular_file() {
   create_mock_executable "${test_script}"
 
   # Create regular file in target
-  echo "regular file" > "${TEST_TARGET_DIR}/test.sh"
+  echo "regular file" > "${TEST_TARGET_DIR}/test.sh" \
+    || { fail 'Cannot write fixture file'; return 1; }
 
-  # Replace with symlink (no prompt)
-  run_symlink_sudo -P -t "${TEST_TARGET_DIR}" "${test_script}"
+  # Replace with symlink — non-interactive replacement requires --force
+  run_symlink_sudo -P --force -t "${TEST_TARGET_DIR}" "${test_script}"
 
   assert_symlink_to "${TEST_TARGET_DIR}/test.sh" "${test_script}"
+}
+
+test_skip_existing_regular_file_without_force() {
+  local -r test_script="${TEST_SOURCE_DIR}/test.sh"
+  create_mock_executable "${test_script}"
+
+  # Pre-existing non-symlink file must NOT be clobbered without --force
+  echo "regular file" > "${TEST_TARGET_DIR}/test.sh" \
+    || { fail 'Cannot write fixture file'; return 1; }
+
+  run_symlink_sudo -P -t "${TEST_TARGET_DIR}" "${test_script}"
+
+  # Still a regular file with original content, not a symlink
+  assert_file_exists "${TEST_TARGET_DIR}/test.sh"
+  [[ ! -L "${TEST_TARGET_DIR}/test.sh" ]] || fail "non-symlink file was clobbered without --force"
+  assert_contains "$(cat -- "${TEST_TARGET_DIR}/test.sh")" "regular file"
+}
+
+test_backup_replace_regular_file() {
+  local -r test_script="${TEST_SOURCE_DIR}/test.sh"
+  create_mock_executable "${test_script}"
+
+  echo "regular file" > "${TEST_TARGET_DIR}/test.sh" \
+    || { fail 'Cannot write fixture file'; return 1; }
+
+  # --backup preserves the clobbered file as NAME.bak~
+  run_symlink_sudo -P --force --backup -t "${TEST_TARGET_DIR}" "${test_script}"
+
+  assert_symlink_to "${TEST_TARGET_DIR}/test.sh" "${test_script}"
+  assert_file_exists "${TEST_TARGET_DIR}/test.sh.bak~"
+  assert_contains "$(cat -- "${TEST_TARGET_DIR}/test.sh.bak~")" "regular file"
 }
 
 test_nonexistent_source_file() {
@@ -312,7 +375,7 @@ test_non_executable_source_file() {
 
 test_source_file_is_directory() {
   local -r test_dir="${TEST_SOURCE_DIR}/testdir"
-  mkdir -p "${test_dir}"
+  must mkdir -p -- "${test_dir}" || return 1
 
   run_symlink -t "${TEST_TARGET_DIR}" "${test_dir}" || true
 
@@ -349,7 +412,7 @@ test_dry_run_existing_symlink() {
   create_mock_executable "${test_script}"
 
   # Create existing symlink
-  ln -sf "${test_script}" "${TEST_TARGET_DIR}/test.sh"
+  must ln -sf -- "${test_script}" "${TEST_TARGET_DIR}/test.sh" || return 1
 
   run_symlink -n -v -t "${TEST_TARGET_DIR}" "${test_script}"
 
@@ -360,12 +423,12 @@ test_dry_run_existing_symlink() {
 test_dry_run_replace_symlink() {
   local -r test_script1="${TEST_SOURCE_DIR}/dir1/test.sh"
   local -r test_script2="${TEST_SOURCE_DIR}/dir2/test.sh"
-  mkdir -p "${TEST_SOURCE_DIR}/dir1" "${TEST_SOURCE_DIR}/dir2"
+  must mkdir -p -- "${TEST_SOURCE_DIR}/dir1" "${TEST_SOURCE_DIR}/dir2" || return 1
   create_mock_executable "${test_script1}"
   create_mock_executable "${test_script2}"
 
   # Create symlink to first script
-  ln -sf "${test_script1}" "${TEST_TARGET_DIR}/test.sh"
+  must ln -sf -- "${test_script1}" "${TEST_TARGET_DIR}/test.sh" || return 1
 
   # Dry-run replace with second script (same basename)
   run_symlink -n -v -P -t "${TEST_TARGET_DIR}" "${test_script2}"
@@ -422,7 +485,7 @@ test_preserve_valid_symlinks_when_deleting_broken() {
   create_mock_executable "${test_script}"
 
   # Create valid symlink
-  ln -sf "${test_script}" "${TEST_TARGET_DIR}/valid"
+  must ln -sf -- "${test_script}" "${TEST_TARGET_DIR}/valid" || return 1
 
   # Create broken symlink
   create_broken_symlink "${TEST_TARGET_DIR}/broken"
@@ -485,7 +548,7 @@ test_scan_symlink_file_with_comments() {
   create_mock_executable "${test_script}"
 
   local -r symlink_file="${TEST_SOURCE_DIR}/.symlink"
-  cat > "${symlink_file}" <<EOF
+  cat > "${symlink_file}" <<EOF || { fail "Cannot write ${symlink_file}"; return 1; }
 # This is a comment
 test.sh
 # Another comment
@@ -501,7 +564,7 @@ test_scan_symlink_file_with_blank_lines() {
   create_mock_executable "${test_script}"
 
   local -r symlink_file="${TEST_SOURCE_DIR}/.symlink"
-  cat > "${symlink_file}" <<EOF
+  cat > "${symlink_file}" <<EOF || { fail "Cannot write ${symlink_file}"; return 1; }
 test.sh
 
 
@@ -518,7 +581,7 @@ test_scan_symlink_file_with_inline_comments() {
   create_mock_executable "${test_script}"
 
   local -r symlink_file="${TEST_SOURCE_DIR}/.symlink"
-  cat > "${symlink_file}" <<EOF
+  cat > "${symlink_file}" <<EOF || { fail "Cannot write ${symlink_file}"; return 1; }
 util.sh # This is an inline comment that should be stripped
 EOF
 
@@ -534,7 +597,7 @@ test_scan_symlink_file_with_inline_comments_and_custom_name() {
   create_mock_executable "${test_script}"
 
   local -r symlink_file="${TEST_SOURCE_DIR}/.symlink"
-  cat > "${symlink_file}" <<EOF
+  cat > "${symlink_file}" <<EOF || { fail "Cannot write ${symlink_file}"; return 1; }
 myutil.sh myutil # Custom name with inline comment
 EOF
 
@@ -551,7 +614,7 @@ test_scan_symlink_file_with_multi_names() {
   create_mock_executable "${test_script}"
 
   local -r symlink_file="${TEST_SOURCE_DIR}/.symlink"
-  cat > "${symlink_file}" <<EOF
+  cat > "${symlink_file}" <<EOF || { fail "Cannot write ${symlink_file}"; return 1; }
 utility.sh helper util-cmd toolbox
 EOF
 
@@ -572,7 +635,7 @@ test_scan_symlink_file_with_multi_names_and_inline_comment() {
   create_mock_executable "${test_script}"
 
   local -r symlink_file="${TEST_SOURCE_DIR}/.symlink"
-  cat > "${symlink_file}" <<EOF
+  cat > "${symlink_file}" <<EOF || { fail "Cannot write ${symlink_file}"; return 1; }
 build.bash build compile # Build tools
 EOF
 
@@ -591,7 +654,7 @@ test_scan_symlink_file_with_indented_comments() {
   create_mock_executable "${test_script}"
 
   local -r symlink_file="${TEST_SOURCE_DIR}/.symlink"
-  cat > "${symlink_file}" <<EOF
+  cat > "${symlink_file}" <<EOF || { fail "Cannot write ${symlink_file}"; return 1; }
   # This is an indented comment
 script.sh
     # Another indented comment with more spaces
@@ -606,7 +669,7 @@ EOF
 test_scan_nested_symlink_files() {
   # Create nested directory structure
   local -r subdir="${TEST_SOURCE_DIR}/subdir"
-  mkdir -p "${subdir}"
+  must mkdir -p -- "${subdir}" || return 1
 
   # Create scripts in both locations
   local -r script1="${TEST_SOURCE_DIR}/script1.sh"
@@ -637,11 +700,11 @@ test_scan_respects_max_depth() {
 
   run_symlink_sudo -S -P -t "${TEST_TARGET_DIR}" "${TEST_SOURCE_DIR}" || true
 
-  # Should not find deep .symlink file (beyond max depth)
-  # Exit code 50 = no symlink files found
-  if ((TEST_EXIT_CODE == 50)); then
-    assert_success echo "Correctly enforced max depth"
-  fi
+  # The only .symlink lives beyond FIND_MAX_DEPTH, so scan must find nothing:
+  # the deep link must NOT be created and the exit code must be 50 (no .symlink
+  # files found). Unconditional — if the depth guard regresses, this fails.
+  assert_file_not_exists "${TEST_TARGET_DIR}/deep.sh"
+  assert_equals 50 "${TEST_EXIT_CODE}"
 }
 
 test_list_mode_shows_symlink_files() {
@@ -653,7 +716,7 @@ test_list_mode_shows_symlink_files() {
 
   assert_contains "${TEST_OUTPUT}" ".symlink"
   assert_contains "${TEST_OUTPUT}" "test.sh"
-  assert_exit_code 0 echo "${TEST_EXIT_CODE}"
+  assert_equals 0 "${TEST_EXIT_CODE}"
 }
 
 test_scan_no_symlink_files_found() {
@@ -666,7 +729,7 @@ test_scan_no_symlink_files_found() {
 
 test_scan_subdirectory_source() {
   # .symlink file referencing source in a subdirectory
-  mkdir -p "${TEST_SOURCE_DIR}/tools"
+  must mkdir -p -- "${TEST_SOURCE_DIR}/tools" || return 1
   local -r test_script="${TEST_SOURCE_DIR}/tools/util.sh"
   create_mock_executable "${test_script}"
 
@@ -707,7 +770,7 @@ test_list_nested_symlink_files() {
   # List mode should find .symlink files in nested directories
   local -r sub1="${TEST_SOURCE_DIR}/project1"
   local -r sub2="${TEST_SOURCE_DIR}/project2"
-  mkdir -p "${sub1}" "${sub2}"
+  must mkdir -p -- "${sub1}" "${sub2}" || return 1
 
   create_mock_executable "${sub1}/tool1.sh"
   create_mock_executable "${sub2}/tool2.sh"
@@ -718,7 +781,7 @@ test_list_nested_symlink_files() {
 
   assert_contains "${TEST_OUTPUT}" "tool1.sh"
   assert_contains "${TEST_OUTPUT}" "tool2.sh"
-  assert_exit_code 0 echo "${TEST_EXIT_CODE}"
+  assert_equals 0 "${TEST_EXIT_CODE}"
 }
 
 #━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -753,7 +816,7 @@ test_handle_symlink_to_executable() {
 
   # Create symlink to script
   local -r link_to_script="${TEST_SOURCE_DIR}/link-to-test"
-  ln -s "${test_script}" "${link_to_script}"
+  must ln -s -- "${test_script}" "${link_to_script}" || return 1
 
   # Symlink the symlink
   run_symlink_sudo -P -t "${TEST_TARGET_DIR}" "${link_to_script}"
@@ -813,29 +876,23 @@ test_force_critical_with_env_var() {
 # Debug Mode Tests
 #━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+# trace_file_from_output - echo the trace path the script logged to stderr.
+# Parsing the actual path (not globbing /tmp) keeps these tests hermetic and
+# immune to stale root-owned trace files from earlier runs.
+trace_file_from_output() {
+  grep -oE '/[^ )]*/symlink-trace-[A-Za-z0-9._-]+\.log' <<< "${TEST_OUTPUT}" | head -1
+}
+
 test_debug_flag_creates_trace() {
   local -r test_script="${TEST_SOURCE_DIR}/test.sh"
   create_mock_executable "${test_script}"
 
   run_symlink_sudo --debug -P -t "${TEST_TARGET_DIR}" "${test_script}"
 
-  # Check for debug trace file
-  local -r trace_pattern="/tmp/symlink-trace-*"
-  local trace_found=0
-
-  # shellcheck disable=SC2086
-  for file in ${trace_pattern}; do
-    if [[ -f "${file}" ]]; then
-      trace_found=1
-      break
-    fi
-  done
-
-  if ((trace_found == 1)); then
-    assert_success echo "Debug trace file created"
-  else
-    fail "Debug trace file not found"
-  fi
+  local trace_file
+  trace_file=$(trace_file_from_output)
+  [[ -n "${trace_file}" && -f "${trace_file}" ]] \
+    || fail "Debug trace file not found (output had no trace path)"
 }
 
 test_debug_env_var() {
@@ -844,39 +901,26 @@ test_debug_env_var() {
 
   SYMLINK_DEBUG=1 run_symlink_sudo -P -t "${TEST_TARGET_DIR}" "${test_script}"
 
-  # Should enable debug mode
-  # Check for trace file
-  local trace_found=0
-  for file in /tmp/symlink-trace-*; do
-    if [[ -f "${file}" ]]; then
-      trace_found=1
-      break
-    fi
-  done
-
-  if ((trace_found == 1)); then
-    assert_success echo "Debug mode enabled via env var"
-  fi
+  local trace_file
+  trace_file=$(trace_file_from_output)
+  [[ -n "${trace_file}" && -f "${trace_file}" ]] \
+    || fail "SYMLINK_DEBUG=1 did not create a trace file"
 }
 
 test_debug_trace_content() {
   local -r test_script="${TEST_SOURCE_DIR}/test.sh"
   create_mock_executable "${test_script}"
 
-  # Clean old traces first
-  rm -f /tmp/symlink-trace-* 2>/dev/null || true
-
   run_symlink_sudo --debug -P -t "${TEST_TARGET_DIR}" "${test_script}"
 
-  # Find and verify trace file content
-  local trace_file=""
-  for f in /tmp/symlink-trace-*; do
-    [[ -f "$f" ]] && { trace_file="$f"; break; }
-  done
+  # Find and verify trace file content (path parsed from the script's own log)
+  local trace_file
+  trace_file=$(trace_file_from_output)
 
   assert_not_empty "${trace_file}" "Trace file should exist"
   local trace_content
-  trace_content=$(cat "$trace_file")
+  trace_content=$(cat -- "${trace_file}") \
+    || { fail "Cannot read trace file ${trace_file@Q}"; return 1; }
   assert_contains "${trace_content}" "TRACE: Script started"
   assert_contains "${trace_content}" "TRACE: Execution completed"
 }
@@ -889,9 +933,165 @@ test_symlink_owner_matches_source() {
 
   # Symlink owner should match source file owner
   local source_owner target_owner
-  source_owner=$(stat -c '%U' "${test_script}")
-  target_owner=$(stat -c '%U' "${TEST_TARGET_DIR}/test.sh")
+  # Checked: two failed stats would compare '' == '' and pass vacuously
+  source_owner=$(stat -c '%U' -- "${test_script}") \
+    || { fail 'Cannot stat source script'; return 1; }
+  target_owner=$(stat -c '%U' -- "${TEST_TARGET_DIR}/test.sh") \
+    || { fail 'Cannot stat created symlink'; return 1; }
   assert_equals "${source_owner}" "${target_owner}" "Symlink owner should match source"
+}
+
+#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Critical-file protection tests (the historical auto-confirm bug site)
+#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+test_critical_file_noninteractive_skips() {
+  # Source basename 'ls' is a hard-protected critical name
+  local -r src="${TEST_SOURCE_DIR}/ls"
+  create_mock_executable "${src}"
+
+  run_symlink_sudo -P -t "${TEST_TARGET_DIR}" "${src}"
+
+  # Non-interactive without override MUST NOT link a critical name
+  [[ ! -L "${TEST_TARGET_DIR}/ls" ]] || fail "critical file linked non-interactively without override"
+  assert_contains "${TEST_OUTPUT}" "appears to be a critical system file"
+}
+
+test_critical_file_interactive_reject() {
+  command -v script >/dev/null 2>&1 || { skip "script(1) not available for pty test"; return 0; }
+  local -r src="${TEST_SOURCE_DIR}/ls"
+  create_mock_executable "${src}"
+
+  # Feed 'n' at the confirmation prompt
+  run_symlink_pty 'n' -t "${TEST_TARGET_DIR}" "${src}"
+
+  [[ ! -L "${TEST_TARGET_DIR}/ls" ]] || fail "critical file linked despite 'n' response"
+  assert_contains "${TEST_OUTPUT}" "appears to be a critical system file"
+}
+
+test_critical_file_interactive_confirm() {
+  command -v script >/dev/null 2>&1 || { skip "script(1) not available for pty test"; return 0; }
+  local -r src="${TEST_SOURCE_DIR}/ls"
+  create_mock_executable "${src}"
+
+  # Feed 'y' at the confirmation prompt
+  run_symlink_pty 'y' -t "${TEST_TARGET_DIR}" "${src}"
+
+  assert_symlink_to "${TEST_TARGET_DIR}/ls" "${src}"
+  assert_contains "${TEST_OUTPUT}" "explicitly confirmed"
+}
+
+test_scan_prompt_reads_tty_not_symlink_file() {
+  # Regression: during -S, create_symlink runs inside `done < .symlink`, so a
+  # yn() that reads stdin takes its answer from the next .symlink entry. Here
+  # the entry after the critical 'ls' starts with 'y': a stdin-reading yn()
+  # would auto-confirm replacing 'ls' and mangle 'yfirst' into 'first'.
+  command -v script >/dev/null 2>&1 || { skip "script(1) not available for pty test"; return 0; }
+  create_mock_executable "${TEST_SOURCE_DIR}/ls"
+  create_mock_executable "${TEST_SOURCE_DIR}/yfirst"
+  create_symlink_file "${TEST_SOURCE_DIR}/.symlink" "ls" "yfirst"
+
+  # Feed 'n' on the terminal at the critical-file prompt
+  run_symlink_pty 'n' -S -t "${TEST_TARGET_DIR}" "${TEST_SOURCE_DIR}"
+
+  [[ ! -L "${TEST_TARGET_DIR}/ls" ]] || fail "critical file linked: prompt answer came from .symlink, not the tty"
+  assert_symlink_to "${TEST_TARGET_DIR}/yfirst" "${TEST_SOURCE_DIR}/yfirst"
+  [[ "${TEST_OUTPUT}" != *"does not exist"* ]] || fail ".symlink entry mangled by prompt read: ${TEST_OUTPUT}"
+}
+
+#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# PATH-shadow advisory tests (non-critical names that override a PATH command)
+#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+test_shadow_warns_noninteractive() {
+  # 'sort' exists on PATH and is NOT a hard-protected critical name
+  command -v sort >/dev/null 2>&1 || { skip "no sort on PATH"; return 0; }
+  local -r src="${TEST_SOURCE_DIR}/sort"
+  create_mock_executable "${src}"
+
+  run_symlink_sudo -P -t "${TEST_TARGET_DIR}" "${src}"
+
+  # Non-blocking: the link IS created but the shadow is surfaced
+  assert_symlink_to "${TEST_TARGET_DIR}/sort" "${src}"
+  assert_contains "${TEST_OUTPUT}" "will shadow"
+}
+
+test_shadow_interactive_reject() {
+  command -v script >/dev/null 2>&1 || { skip "script(1) not available for pty test"; return 0; }
+  command -v sort >/dev/null 2>&1 || { skip "no sort on PATH"; return 0; }
+  local -r src="${TEST_SOURCE_DIR}/sort"
+  create_mock_executable "${src}"
+
+  run_symlink_pty 'n' -t "${TEST_TARGET_DIR}" "${src}"
+
+  [[ ! -L "${TEST_TARGET_DIR}/sort" ]] || fail "shadow link created despite 'n' response"
+  assert_contains "${TEST_OUTPUT}" "will shadow"
+}
+
+#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Containment / Security Boundary Tests
+# The .symlink source/link-name containment checks are the real security
+# boundary when scanning untrusted trees as root. These exercise it directly.
+#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+test_containment_rejects_absolute_source() {
+  # An absolute source must be refused (a hostile tree cannot publish a link to
+  # an arbitrary system path).
+  create_symlink_file "${TEST_SOURCE_DIR}/.symlink" "/etc/passwd evil"
+
+  run_symlink_sudo -S -P -t "${TEST_TARGET_DIR}" "${TEST_SOURCE_DIR}" || true
+
+  assert_file_not_exists "${TEST_TARGET_DIR}/evil"
+  assert_contains "${TEST_OUTPUT}" "Refusing source outside"
+  assert_equals 1 "${TEST_EXIT_CODE}"
+}
+
+test_containment_rejects_parent_escape() {
+  # A real, reachable executable outside the .symlink dir must still be refused
+  # when referenced via '../' — containment is about the path, not existence.
+  create_mock_executable "${TEST_ROOT}/outside.sh"
+  create_symlink_file "${TEST_SOURCE_DIR}/.symlink" "../outside.sh escapee"
+
+  run_symlink_sudo -S -P -t "${TEST_TARGET_DIR}" "${TEST_SOURCE_DIR}" || true
+
+  assert_file_not_exists "${TEST_TARGET_DIR}/escapee"
+  assert_contains "${TEST_OUTPUT}" "Refusing source outside"
+  assert_equals 1 "${TEST_EXIT_CODE}"
+}
+
+test_containment_rejects_unsafe_link_name() {
+  # A link name must be a bare filename — a path-bearing name (sub/bad) that
+  # would escape the target dir must be refused and create nothing.
+  local -r src="${TEST_SOURCE_DIR}/tool.sh"
+  create_mock_executable "${src}"
+  create_symlink_file "${TEST_SOURCE_DIR}/.symlink" "tool.sh sub/bad"
+
+  run_symlink_sudo -S -P -t "${TEST_TARGET_DIR}" "${TEST_SOURCE_DIR}" || true
+
+  assert_file_not_exists "${TEST_TARGET_DIR}/sub/bad"
+  assert_file_not_exists "${TEST_TARGET_DIR}/bad"
+  assert_contains "${TEST_OUTPUT}" "Refusing unsafe link name"
+  assert_equals 1 "${TEST_EXIT_CODE}"
+}
+
+# Elevation env-drop contract (M9/M10). A live non-root re-exec test would need
+# an unprivileged user with passwordless sudo, which is environment-specific and
+# fragile; instead assert the hardening directly on the source: the elevation
+# must forward only SYMLINK_DEBUG and must NOT use `sudo -E` (which would carry
+# SYMLINK_FORCE_CRITICAL across the privilege boundary unvalidated).
+test_elevation_does_not_forward_force_critical() {
+  local -- elevation_line
+  # Single quotes are intentional: the regex must match a literal $0 in the source.
+  # shellcheck disable=SC2016
+  elevation_line="$(grep -nE -- '^[[:space:]]*sudo .*"\$0"' "${SYMLINK_BIN}")"
+  assert_not_empty "${elevation_line}"
+  assert_contains "${elevation_line}" 'SYMLINK_DEBUG='
+  # Must NOT preserve the full environment across elevation.
+  [[ "${elevation_line}" != *'sudo -E'* ]] \
+    || fail "elevation uses 'sudo -E' — would leak SYMLINK_FORCE_CRITICAL across privilege boundary"
+  # Must NOT explicitly forward the critical-file override.
+  [[ "${elevation_line}" != *'SYMLINK_FORCE_CRITICAL'* ]] \
+    || fail "elevation forwards SYMLINK_FORCE_CRITICAL across privilege boundary"
 }
 
 #━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -987,7 +1187,8 @@ test_symlink_file_with_windows_line_endings() {
 
   local -r symlink_file="${TEST_SOURCE_DIR}/.symlink"
   # Create file with CRLF line endings
-  printf 'crlf-test.sh\r\n' > "${symlink_file}"
+  printf 'crlf-test.sh\r\n' > "${symlink_file}" \
+    || { fail "Cannot write ${symlink_file}"; return 1; }
 
   run_symlink_sudo -S -P -t "${TEST_TARGET_DIR}" "${TEST_SOURCE_DIR}"
 
@@ -997,7 +1198,8 @@ test_symlink_file_with_windows_line_endings() {
 test_symlink_file_with_escaped_spaces() {
   local -r test_script="${TEST_SOURCE_DIR}/my script.sh"
   create_mock_executable "${test_script}"
-  printf 'my\\ script.sh\n' > "${TEST_SOURCE_DIR}/.symlink"
+  printf 'my\\ script.sh\n' > "${TEST_SOURCE_DIR}/.symlink" \
+    || { fail 'Cannot write .symlink'; return 1; }
   run_symlink_sudo -S -P -t "${TEST_TARGET_DIR}" "${TEST_SOURCE_DIR}"
   assert_file_exists "${TEST_TARGET_DIR}/my script.sh"
 }
@@ -1005,15 +1207,17 @@ test_symlink_file_with_escaped_spaces() {
 test_symlink_file_escaped_space_custom_name() {
   local -r test_script="${TEST_SOURCE_DIR}/my script.sh"
   create_mock_executable "${test_script}"
-  printf 'my\\ script.sh myscript\n' > "${TEST_SOURCE_DIR}/.symlink"
+  printf 'my\\ script.sh myscript\n' > "${TEST_SOURCE_DIR}/.symlink" \
+    || { fail 'Cannot write .symlink'; return 1; }
   run_symlink_sudo -S -P -t "${TEST_TARGET_DIR}" "${TEST_SOURCE_DIR}"
   assert_symlink_created "myscript"
 }
 
 test_symlink_file_escaped_space_in_path() {
-  mkdir -p "${TEST_SOURCE_DIR}/my tools"
+  must mkdir -p -- "${TEST_SOURCE_DIR}/my tools" || return 1
   create_mock_executable "${TEST_SOURCE_DIR}/my tools/helper.sh"
-  printf 'my\\ tools/helper.sh\n' > "${TEST_SOURCE_DIR}/.symlink"
+  printf 'my\\ tools/helper.sh\n' > "${TEST_SOURCE_DIR}/.symlink" \
+    || { fail 'Cannot write .symlink'; return 1; }
   run_symlink_sudo -S -P -t "${TEST_TARGET_DIR}" "${TEST_SOURCE_DIR}"
   assert_symlink_created "helper.sh"
 }
@@ -1021,7 +1225,8 @@ test_symlink_file_escaped_space_in_path() {
 test_symlink_file_multiple_escaped_spaces() {
   local -r test_script="${TEST_SOURCE_DIR}/my great script.sh"
   create_mock_executable "${test_script}"
-  printf 'my\\ great\\ script.sh mgs\n' > "${TEST_SOURCE_DIR}/.symlink"
+  printf 'my\\ great\\ script.sh mgs\n' > "${TEST_SOURCE_DIR}/.symlink" \
+    || { fail 'Cannot write .symlink'; return 1; }
   run_symlink_sudo -S -P -t "${TEST_TARGET_DIR}" "${TEST_SOURCE_DIR}"
   assert_symlink_created "mgs"
 }
@@ -1034,7 +1239,7 @@ test_workflow_admin_full_scan() {
   # Simulate: sudo symlink -SPd /projects
   local -r project1="${TEST_SOURCE_DIR}/project1"
   local -r project2="${TEST_SOURCE_DIR}/project2"
-  mkdir -p "${project1}" "${project2}"
+  must mkdir -p -- "${project1}" "${project2}" || return 1
 
   # Create scripts
   create_mock_executable "${project1}/tool1.sh"
@@ -1083,18 +1288,11 @@ test_workflow_debug_comprehensive() {
   # Should be dry-run
   assert_contains "${TEST_OUTPUT}" "No changes were made"
 
-  # Check for debug trace
-  local trace_found=0
-  for file in /tmp/symlink-trace-*; do
-    if [[ -f "${file}" ]]; then
-      trace_found=1
-      break
-    fi
-  done
-
-  if ((trace_found == 1)); then
-    assert_success echo "Debug trace created in comprehensive workflow"
-  fi
+  # Check for debug trace (path parsed from the script's own log output)
+  local trace_file
+  trace_file=$(trace_file_from_output)
+  [[ -n "${trace_file}" && -f "${trace_file}" ]] \
+    || fail "comprehensive workflow produced no debug trace"
 }
 
 #━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1168,7 +1366,9 @@ test "Create new symlink" test_create_new_symlink
 test "Create symlink with custom name" test_create_symlink_with_custom_name
 test "Skip existing same symlink" test_skip_existing_same_symlink
 test "Replace existing different symlink" test_replace_existing_different_symlink
-test "Replace existing regular file" test_replace_existing_regular_file
+test "Replace existing regular file (--force)" test_replace_existing_regular_file
+test "Skip existing regular file without --force" test_skip_existing_regular_file_without_force
+test "Backup replaced regular file (--backup)" test_backup_replace_regular_file
 test "Nonexistent source file fails" test_nonexistent_source_file
 test "Non-executable source file fails" test_non_executable_source_file
 test "Source directory fails" test_source_file_is_directory
@@ -1222,6 +1422,22 @@ test "Debug via environment variable" test_debug_env_var
 test "Debug trace file content" test_debug_trace_content
 test "Symlink owner matches source" test_symlink_owner_matches_source
 
+# Critical-file protection
+test "Critical file skipped non-interactively" test_critical_file_noninteractive_skips
+test "Critical file interactive reject (pty)" test_critical_file_interactive_reject
+test "Critical file interactive confirm (pty)" test_critical_file_interactive_confirm
+test "Scan prompt reads tty, not .symlink (pty)" test_scan_prompt_reads_tty_not_symlink_file
+
+# PATH-shadow advisory
+test "Shadow warns non-interactively" test_shadow_warns_noninteractive
+test "Shadow interactive reject (pty)" test_shadow_interactive_reject
+
+# Containment / security boundary
+test "Containment: reject absolute source" test_containment_rejects_absolute_source
+test "Containment: reject parent escape" test_containment_rejects_parent_escape
+test "Containment: reject unsafe link name" test_containment_rejects_unsafe_link_name
+test "Elevation drops SYMLINK_FORCE_CRITICAL" test_elevation_does_not_forward_force_critical
+
 # Exit codes
 test "Exit code 0 on success" test_exit_code_success
 test "Exit code 3 for file not found" test_exit_code_file_not_found
@@ -1256,8 +1472,17 @@ test "Summary dry-run format" test_summary_dry_run_format
 
 # Ensure we're running as root or can sudo
 if ! is_root && ! has_sudo; then
-  echo "ERROR: This test suite requires root access or sudo privileges"
-  echo "Please run with: sudo ./test-symlink"
+  >&2 echo "ERROR: This test suite requires root access or sudo privileges"
+  >&2 echo "Please run with: sudo ./test-symlink"
+  exit 1
+fi
+
+# script(1) (util-linux) is REQUIRED, not optional: the interactive yn()/dev/tty
+# safety tests run under a pty via script(1). Treating it as optional let the
+# entire interactive-safety matrix skip silently on hosts without it. Fail loud.
+if ! command -v script >/dev/null 2>&1; then
+  >&2 echo "ERROR: 'script' (util-linux) is required to run the interactive pty tests"
+  >&2 echo "Install it with: apt-get install bsdutils  (or util-linux)"
   exit 1
 fi
 

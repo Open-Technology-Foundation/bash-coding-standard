@@ -2,12 +2,19 @@
 # get-pubkey - Get the current user's SSH public key.
 
 get_pubkey() {
-  local -- keyfile
+  local -- keyfile pwent
 
   if (($#)); then
     local -- HOME
-    HOME=$(sudo getent passwd "$1" |cut -d: -f6) || {
+    # getent on its own: a pipeline's status would depend on whether the
+    # sourcing shell set pipefail
+    if [[ -z $1 ]] || ! pwent=$(getent passwd -- "$1"); then
       >&2 echo "${FUNCNAME[0]}: error: user ${1@Q} not found"
+      return 2
+    fi
+    IFS=: read -r _ _ _ _ _ HOME _ <<<"$pwent"
+    [[ -n $HOME ]] || {
+      >&2 echo "${FUNCNAME[0]}: error: user ${1@Q} has no home directory"
       return 2
     }
   fi
@@ -26,8 +33,9 @@ declare -fx get_pubkey
 # --- Script mode only below ---
 set -euo pipefail
 shopt -s inherit_errexit
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
-declare -r SCRIPT_NAME=get-pubkey VERSION='1.0.0'
+declare -r SCRIPT_NAME=get-pubkey VERSION='1.1.0'
 
 show_help() {
   cat <<HELP
@@ -46,9 +54,10 @@ Options:
   -V, --version   Show version
 
 Exit codes:
-  0  Key found and printed
-  1  No readable public key found
-  2  USER not found
+  0   Key found and printed
+  1   No readable public key found
+  2   USER not found
+  22  Invalid option or too many arguments
 
 Examples:
   $SCRIPT_NAME
@@ -57,15 +66,20 @@ Examples:
 HELP
 }
 
-while (($#)); do
-  case $1 in
-    -h|--help)    show_help; exit 0 ;;
-    -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
-    -*)           >&2 echo "$SCRIPT_NAME: error: unknown option ${1@Q}"
-                  >&2 show_help; exit 1 ;;
-  esac
-  break
-done
+declare -a args=()
+while (($#)); do case $1 in
+  -h|--help)    show_help; exit 0 ;;
+  -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
+  --)           shift; args+=("$@"); break ;;
+  -*)           >&2 echo "$SCRIPT_NAME: error: unknown option ${1@Q}"
+                >&2 show_help; exit 22 ;;
+  *)            args+=("$1") ;;
+esac; shift; done
 
-get_pubkey "$@"
+((${#args[@]} <= 1)) || {
+  >&2 echo "Usage: $SCRIPT_NAME [-h] [-V] [USER]"
+  exit 22
+}
+
+get_pubkey "${args[@]}"
 #fin

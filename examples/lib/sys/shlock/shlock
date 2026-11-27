@@ -1,5 +1,5 @@
-#!/bin/bash
-#shellcheck disable=SC2317  # Defensive: cleanup() is invoked via EXIT trap (indirect)
+#!/usr/bin/bash
+#shellcheck disable=SC2317,SC2329  # Defensive: cleanup() is invoked via EXIT trap (indirect)
 #
 # shlock - File-based locking system with stale lock detection
 #
@@ -33,14 +33,16 @@
 #   - Non-blocking by default (fails immediately if lock is held)
 #   - With -w/--wait: blocks until lock is available
 #   - With -t/--timeout: waits up to specified seconds
-#   - Stale lock detection: removes locks older than --max-age or with dead holders
+#   - Stale lock detection: cleans dead-holder locks; refuses age-stale locks if holder still alive
+#   - A holder is alive if its recorded PID is running or the flock is still held
+#     (the PID file can be missing, unreadable or stale)
 #
 # EXIT CODES (BCS-canonical):
 #   0   - Command executed successfully (wrapped command exit code passed through)
 #   1   - Lock held (non-timeout acquisition failure) or steal cancelled by user
 #   2   - Usage error (missing COMMAND or -- separator)
 #   5   - I/O error (failed to write PID file after acquiring lock)
-#   13  - Permission denied (no writable lock directory)
+#   13  - Permission denied (no writable lock directory, or lock file unopenable)
 #   22  - Invalid argument (unknown option, bad LOCKNAME, non-numeric value)
 #   24  - Timeout (--timeout N expired)
 #   *   - Any other code: propagated from the wrapped command
@@ -71,20 +73,21 @@
 #   - Lock files persist after command completion for reuse
 #   - PID files are cleaned up on exit
 #   - flock is released when the script exits (normal or signal)
-#   - --steal removes dead locks automatically, prompts only for running processes
+#   - --steal removes abandoned locks automatically, prompts when the holder is alive
 #   - Safe for use in cron jobs and automated scripts
 
 set -euo pipefail
-shopt -s inherit_errexit shift_verbose
+shopt -s inherit_errexit
+
 umask 0022
 
-declare -rx PATH=${HOME:-/root}/.local/bin:/usr/local/bin:/usr/bin:/bin
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
-# Script metadata
-declare -r VERSION=2.0.1
+# --- Script metadata ---
+declare -r VERSION=2.0.2
 declare -r SCRIPT_NAME=${0##*/}
 
-# Global variables
+# --- Global variables ---
 declare -- LOCKNAME=''
 declare -- LOCKFILE=''
 declare -- PIDFILE=''
@@ -94,11 +97,10 @@ declare -i TIMEOUT_SECONDS=0
 declare -i TIMEOUT_SET=0
 declare -i STEAL_MODE=0
 
-# Messaging functions
-
-warn() { >&2 echo "$SCRIPT_NAME: ▲ $*"; }
-error() { >&2 echo "$SCRIPT_NAME: ✗ $*"; }
-die() { (($# < 2)) || error "${@:2}"; exit "${1:-1}"; }
+# --- Messaging functions ---
+warn() { >&2 printf "$SCRIPT_NAME: ▲ %s\n" "$@"; }
+error() { >&2 printf "$SCRIPT_NAME: ✗ %s\n" "$@"; }
+die() { error "${@:2}"; exit "$1"; }
 
 # Prompt user with a y/n question on stderr (30s timeout, single keypress).
 # $1: prompt text (default 'Continue?'). Returns 0 on 'y'/'Y', 1 otherwise
@@ -111,8 +113,7 @@ yn() {
   [[ ${REPLY,,} == y ]]
 }
 
-# Usage display -----------------------
-
+# --- Usage display ---
 show_help() {
   cat <<HELP
 $SCRIPT_NAME $VERSION - file-based locking system with stale lock detection
@@ -141,7 +142,7 @@ Exit codes (BCS-canonical):
   1                        Lock held (non-timeout) or steal cancelled by user
   2                        Usage error (missing COMMAND or -- separator)
   5                        I/O error (failed to write PID file)
-  13                       Permission denied (no writable lock directory)
+  13                       Permission denied (no writable lock dir, or lock file unopenable)
   22                       Invalid argument (unknown option, bad LOCKNAME, non-numeric)
   24                       Timeout (--timeout N expired)
   *                        Any other code: propagated from the wrapped command
@@ -170,8 +171,7 @@ Examples:
 HELP
 }
 
-# Helper functions
-
+# --- Helper functions ---
 # Validate that $2 exists and is numeric, die with error if not
 arg2_num() {
   if (($# < 2)) || [[ ! $2 =~ ^[0-9]+$ ]]; then
@@ -196,8 +196,8 @@ determine_lock_dir() {
   # Fall back to /tmp/locks - create if needed, sticky-bit for multi-user safety
   dir=/tmp/locks
   if [[ ! -d $dir ]]; then
-    mkdir -p "$dir" 2>/dev/null || return 1
-    chmod 1777 "$dir" 2>/dev/null ||:
+    mkdir -p -- "$dir" 2>/dev/null || return 1
+    chmod -- 1777 "$dir" 2>/dev/null ||:  # best effort: the -w test below decides usability
   fi
 
   if [[ -w $dir ]]; then
@@ -218,27 +218,41 @@ is_process_running() {
 }
 
 # Read PID from pidfile, trim whitespace, validate numeric.
-# Prints PID on success, 'unknown' on any failure.
+# Prints PID on success, 'unknown' on any failure. -s also keeps a FIFO from
+# blocking the read. The file can vanish or be unreadable after the -s test:
+# read then fails softly, whereas a failed $(<file) aborts under set -e (bash
+# 5.2) even before ||.
 read_holder_pid() {
-  local -- pid
+  local -- pid=''
   [[ -s $PIDFILE ]] || { echo unknown; return; }
-  pid=$(<"$PIDFILE") || { echo unknown; return; }
+  { read -r pid || [[ -n $pid ]]; } 2>/dev/null <"$PIDFILE" || { echo unknown; return; }
   pid=${pid//[[:space:]]/}
   [[ $pid =~ ^[1-9][0-9]*$ ]] || { echo unknown; return; }
   echo "$pid"
 }
 
+# Return 0 if some process holds the flock on LOCKFILE, 1 if it is free.
+# The PID file can be missing, unreadable or name a dead process while a live
+# holder still has the lock, so no lock file is removed on its word alone.
+# flock(1) opens the file read-only (mtime untouched) and releases at once.
+# A probe that fails for any other reason counts as held: leaving a lock in
+# place is recoverable, unlinking a held one breaks mutual exclusion.
+lock_is_held() {
+  ! flock -n -- "$LOCKFILE" true 2>/dev/null
+}
+
 # Return 0 if $1 lockfile mtime is older than MAX_AGE_HOURS; 1 otherwise.
-# Note: mtime is updated on each acquisition (file opened with '>'), so this
-# tracks the most recent lock attempt, not the original creation time.
+# Note: mtime tracks lockfile creation (or last cleanup-recreate), not each
+# acquisition attempt — acquirers open fd 200 with '>>' (append, no write),
+# which preserves mtime. Stale-by-age detection is reliable across polling.
 is_lock_stale() {
   local -- lockfile=$1
   local -i max_age_seconds=$((MAX_AGE_HOURS * 3600))
 
   [[ -f $lockfile ]] || return 1  # Not stale if doesn't exist
 
-  local -- mtime
-  mtime=$(stat -c %Y "$lockfile" 2>/dev/null) || {
+  local -i mtime
+  mtime=$(stat -c %Y -- "$lockfile" 2>/dev/null) || {
     warn "Cannot stat ${lockfile@Q}; treating as not-stale"
     return 1
   }
@@ -252,69 +266,79 @@ is_lock_stale() {
 # attempted; flock on the existing file will simply fail loudly if still held).
 clean_stale_lock() {
   warn "Lock is older than $MAX_AGE_HOURS hours, removing stale lock"
-  rm -f "$LOCKFILE" "$PIDFILE" 2>/dev/null \
+  rm -f -- "$LOCKFILE" "$PIDFILE" 2>/dev/null \
     || warn "Failed to remove stale lock files ${LOCKFILE@Q} ${PIDFILE@Q}"
 }
 
-# EXIT-trap handler (installed after flock succeeds). Removes the PID file
-# only; the lock file is retained intentionally so the next acquisition
-# reuses it without racing to recreate. flock itself is released when fd 200
-# closes at process exit. SC2317 disabled at top of file because shellcheck
-# cannot see this function is reached via trap.
+# EXIT-trap handler. Armed before flock, so it also runs in contenders that
+# never acquired the lock: it removes the PID file only when that file records
+# this process. Without the ownership check a failed contender (or a holder
+# whose lock was stolen) deletes the live holder's PID file, and the stale and
+# --steal checks then mistake that holder for dead and break mutual exclusion.
+# The lock file is retained intentionally so the next acquisition reuses it
+# without racing to recreate. flock itself is released when fd 200 closes at
+# process exit. SC2317 disabled at top of file because shellcheck cannot see
+# this function is reached via trap.
 cleanup() {
   trap - EXIT
-  rm -f "$PIDFILE" 2>/dev/null ||:
+  # ||: covers both "not our PID file" (no rm) and a failed rm: neither may
+  # disturb the exit status the script is already leaving with
+  [[ $(read_holder_pid 2>/dev/null) == "$$" ]] && rm -f -- "$PIDFILE" 2>/dev/null ||:
 }
 
 # Forcefully remove an existing lock (invoked by --steal).
 # Decision tree:
-#   no lock file       → noop (caller proceeds with normal acquisition)
-#   holder PID dead    → remove lock + pid automatically (no prompt)
-#   holder PID running → warn, prompt via yn(); exit 1 if user declines
+#   no lock file                    → noop (caller proceeds with normal acquisition)
+#   holder PID running              → warn, prompt via yn(); exit 1 if user declines
+#   flock held, PID missing/stale   → the same: a live holder whose PID is unknown
+#   flock free                      → abandoned: remove lock + pid (no prompt)
 # WARNING: stealing an active lock breaks the mutual-exclusion guarantee.
 steal_lock() {
-  if [[ ! -f $LOCKFILE ]]; then
-    return 0
-  fi
+  [[ -f $LOCKFILE ]] || return 0
 
-  local -- holder_pid
+  local -- holder_pid holder=''
   holder_pid=$(read_holder_pid)
 
   if [[ $holder_pid != unknown ]] && is_process_running "$holder_pid"; then
-    warn "Lock ${LOCKNAME@Q} is held by RUNNING process PID $holder_pid"
-    if ! yn 'Really steal this lock?'; then
-      die 1 'Lock steal cancelled by user'
-    fi
-    warn "Stealing lock ${LOCKNAME@Q} from running process..."
-  else
-    warn "Removing abandoned lock ${LOCKNAME@Q} (process $holder_pid is dead)"
+    holder="PID $holder_pid"
+  elif lock_is_held; then
+    holder='with unknown PID (PID file missing, unreadable or stale)'
   fi
 
-  rm -f "$LOCKFILE" "$PIDFILE" 2>/dev/null \
+  if [[ -n $holder ]]; then
+    warn "Lock ${LOCKNAME@Q} is held by RUNNING process $holder"
+    yn 'Really steal this lock?' || die 1 'Lock steal cancelled by user'
+    warn "Stealing lock ${LOCKNAME@Q} from running process..."
+  elif [[ $holder_pid == unknown ]]; then
+    warn "Removing abandoned lock ${LOCKNAME@Q} (holder PID unrecorded)"
+  else
+    warn "Removing abandoned lock ${LOCKNAME@Q} (holder PID $holder_pid no longer running)"
+  fi
+
+  rm -f -- "$LOCKFILE" "$PIDFILE" 2>/dev/null \
     || warn 'Failed to remove lock files during steal'
 }
 
-# Main entry
-
+# --- Main entry ---
 main() {
   while (($#)); do
     case $1 in
       -h|--help)
-        show_help; return 0
+        show_help; exit 0
         ;;
       -V|--version)
-        printf '%s %s\n' "$SCRIPT_NAME" "$VERSION"; return 0
+        printf '%s %s\n' "$SCRIPT_NAME" "$VERSION"; exit 0
         ;;
       -m|--max-age)
         arg2_num "$@"; shift
-        MAX_AGE_HOURS=$1
+        MAX_AGE_HOURS=$((10#$1))  # 10#: leading zeros are decimal, not octal
         ;;
       -w|--wait)
         WAIT_MODE=1
         ;;
       -t|--timeout)
         arg2_num "$@"; shift
-        TIMEOUT_SECONDS=$1
+        TIMEOUT_SECONDS=$((10#$1))
         TIMEOUT_SET=1
         ;;
       -s|--steal)
@@ -333,7 +357,10 @@ main() {
       *)
         # First non-option argument is the lock name
         LOCKNAME=$1
-        [[ ${2:-} == '--' ]] || die 2 "Expected -- after LOCKNAME, got ${2:-<end-of-args>}"
+        if [[ ${2:-} != '--' ]]; then
+          (($# > 1)) || die 2 'Expected -- after LOCKNAME, got <end-of-args>'
+          die 2 "Expected -- after LOCKNAME, got ${2@Q}"
+        fi
         ;;
     esac
     shift
@@ -344,13 +371,14 @@ main() {
 
   if [[ -z $LOCKNAME ]]; then
     # Auto-generate LOCKNAME from basename of COMMAND (if not provided)
-    # Exit with error if LOCKNAME derivation fails
     LOCKNAME=${1##*/}
     [[ -n $LOCKNAME ]] || die 22 "LOCKNAME could not be acquired from ${1@Q}"
   fi
 
-  [[ $LOCKNAME =~ ^[a-zA-Z0-9._-]+$ ]] || die 22 "Invalid LOCKNAME ${LOCKNAME@Q} (alphanumeric, dots, hyphens, underscores only)"
+  [[ $LOCKNAME =~ ^[a-zA-Z0-9._-]+$ ]] \
+    || die 22 "Invalid LOCKNAME ${LOCKNAME@Q} (alphanumeric, dots, hyphens, underscores only)"
   [[ ! $LOCKNAME =~ ^\.+$ ]] || die 22 "Invalid LOCKNAME ${LOCKNAME@Q} (cannot be only dots)"
+  readonly -- LOCKNAME MAX_AGE_HOURS WAIT_MODE TIMEOUT_SECONDS TIMEOUT_SET STEAL_MODE
 
   # Determine lock directory with fallback
   local -- LOCK_DIR
@@ -360,7 +388,15 @@ main() {
   LOCKFILE="$LOCK_DIR"/"$LOCKNAME".lock
   PIDFILE="$LOCK_DIR"/"$LOCKNAME".pid
 
-  # Check if lock file exists: cleanup if stale by age, or if holder is dead
+  # --steal runs before stale-cleanup so the user's explicit override is not
+  # short-circuited by the age-stale-with-running-holder refusal below.
+  if ((STEAL_MODE)); then
+    steal_lock
+  fi
+
+  # Lock file exists: refuse an age-stale lock whose holder is alive, else clean
+  # it by age, or reclaim it from a dead holder. Alive: the recorded PID is
+  # running or, whatever the PID file says, the flock is held.
   if [[ -f $LOCKFILE ]]; then
     local -- old_pid
     old_pid=$(read_holder_pid)
@@ -371,21 +407,24 @@ main() {
         error "Lock is stale but process $old_pid is still running"
         die 1 "Lock held by PID $old_pid (running for $MAX_AGE_HOURS+ hours)"
       fi
+      if lock_is_held; then
+        error 'Lock is stale but still held (PID file missing, unreadable or stale)'
+        die 1 "Lock ${LOCKNAME@Q} is held (older than $MAX_AGE_HOURS hours)"
+      fi
       clean_stale_lock
-    elif [[ $old_pid != unknown ]] && ! is_process_running "$old_pid"; then
-      # Lock within max-age but holder process is dead: reclaim
+    elif [[ $old_pid != unknown ]] && ! is_process_running "$old_pid" && ! lock_is_held; then
+      # Lock within max-age, recorded holder dead and flock free: reclaim. A held
+      # flock means the PID file is stale; flock below then reports or waits.
       warn "Removing abandoned lock (holder PID $old_pid no longer running)"
-      rm -f "$LOCKFILE" "$PIDFILE" 2>/dev/null \
+      rm -f -- "$LOCKFILE" "$PIDFILE" 2>/dev/null \
         || warn 'Failed to reclaim abandoned lock'
     fi
   fi
 
-  if ((STEAL_MODE)); then
-    steal_lock
-  fi
-
-  # Try to acquire lock using flock
-  exec 200>"$LOCKFILE"
+  # Try to acquire lock using flock. Open with '>>' (append, no truncation) so
+  # contender attempts do not refresh the lockfile mtime — keeps is_lock_stale
+  # honest under polling. flock semantics are unaffected by O_APPEND.
+  exec 200>>"$LOCKFILE" || die 13 "Cannot open lock file ${LOCKFILE@Q}"
   trap cleanup EXIT
 
   # Determine flock options (timeout takes priority over wait mode)
@@ -401,13 +440,13 @@ main() {
   fi
 
   if ! flock "${flock_opts[@]}" 200; then
-    # Lock acquisition failed
     if ((TIMEOUT_SET)); then
       die 24 "Timeout after $TIMEOUT_SECONDS seconds waiting for lock ${LOCKNAME@Q}"
     else
       local -- holder_pid
       holder_pid=$(read_holder_pid)
-      if [[ $holder_pid != unknown ]]; then
+      # Name the PID only if it is running: a stale PID file outlives its writer
+      if [[ $holder_pid != unknown ]] && is_process_running "$holder_pid"; then
         die 1 "Lock ${LOCKNAME@Q} is currently held by PID $holder_pid"
       else
         die 1 "Lock ${LOCKNAME@Q} is currently held"
@@ -417,10 +456,10 @@ main() {
 
   echo $$ > "$PIDFILE" || die 5 "Failed to write PID file ${PIDFILE@Q}"
 
+  # Execute the shlocked command
   local -i exit_code=0
   "$@" || exit_code=$?
-
-  exit "$exit_code"
+  exit $exit_code
 }
 
 main "$@"

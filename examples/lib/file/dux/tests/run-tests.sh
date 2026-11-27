@@ -9,7 +9,7 @@ declare -r SCRIPT_DIR=${SCRIPT_PATH%/*}
 
 declare -r DUX="$SCRIPT_DIR"/../dir-sizes
 
-declare -gi TOTAL_PASSED=0 TOTAL_FAILED=0 TOTAL_RUN=0
+declare -gi TOTAL_PASSED=0 TOTAL_FAILED=0 TOTAL_RUN=0 TOTAL_WARNED=0
 declare -a FAILED_SUITES=()
 
 # Colors (BCS0105: check both stdout and stderr)
@@ -35,7 +35,7 @@ echo "Version: $("$DUX" --version)"
 echo
 
 # Run each test file
-declare -- test_file test_name output passed failed run
+declare -- test_file test_name output passed failed run warned
 declare -i exit_code
 for test_file in "$SCRIPT_DIR"/test-*.sh; do
   [[ -f $test_file ]] || continue
@@ -65,6 +65,10 @@ for test_file in "$SCRIPT_DIR"/test-*.sh; do
     run=${BASH_REMATCH[1]}
     TOTAL_RUN=$((TOTAL_RUN + run))
   fi
+  if [[ $output =~ Warnings:\ ([0-9]+) ]]; then
+    warned=${BASH_REMATCH[1]}
+    TOTAL_WARNED=$((TOTAL_WARNED + warned))
+  fi
 
   ((exit_code == 0)) || FAILED_SUITES+=("$test_name")
 
@@ -78,6 +82,7 @@ echo "${BOLD}━━━━━━━━━━━━━━━━━━━━━━�
 echo "  Total:  $TOTAL_RUN"
 echo "  ${GREEN}Passed: $TOTAL_PASSED${NC}"
 echo "  ${RED}Failed: $TOTAL_FAILED${NC}"
+echo "  ${YELLOW}Warnings: $TOTAL_WARNED${NC}"
 
 if ((${#FAILED_SUITES[@]})); then
   echo

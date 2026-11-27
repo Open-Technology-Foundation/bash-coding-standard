@@ -178,7 +178,11 @@ trimv ()
                 printf "${FUNCNAME[0]}: ✗ %s\n" "invalid variable name ${_trimv__varname@Q}" 1>&2;
                 return 1
             };
-            shift 2;
+            if (($# > 1)); then
+                shift 2;
+            else
+                shift;
+            fi;
         fi;
     fi;
     if (($#)); then

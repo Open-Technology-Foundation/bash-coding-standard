@@ -1,18 +1,35 @@
-#!/usr/bin/bash
+#!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2025-2026 Indonesian Open Technology Foundation (admin@yatti.id)
-# which - locate executables in PATH (script or sourceable function)
-# Usage: which -h
-#shellcheck disable=SC2317 # False positive line 103
+# which - locate executables in PATH; drop-in for debianutils which, plus -c/-s.
+# Dual-mode: run directly, or `source` it to define the which() function.
+# Options precede operands (the first operand ends option parsing, getopts-style).
+# Exit: 0=found, 1=not found or no args, 2=invalid option. See 'which -h'.
+#shellcheck disable=SC2317 # False positive on which "$@" in the source fence
+
+# Require Bash 4.4+ (uses ${var@Q} and shopt -s inherit_errexit). Inline per-
+# component check, not BCS0409's require_bash predicates: defining global helper
+# functions would leak them into every shell that sources this file.
+((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4))) || {
+  >&2 printf 'which: requires Bash >= 4.4 (have %s)\n' "${BASH_VERSION:-unknown}"
+  return 2 2>/dev/null || exit 2
+}
 
 which() {
+  local -r VERSION='2.0'
   local -i allmatches=0 canonical=0 silent=0 allret=0 found=0
   local -a targets=() path_dirs=()
-  local target path full_path resolved
+  local -- target path full_path resolved
 
-  _which_help() {
-    cat <<'HELP'
-which 2.0 - Locate executables in PATH
+  while (($#)); do
+    case $1 in
+      -a|--all)       allmatches=1 ;;
+      -c|--canonical) canonical=1 ;;
+      -s|--silent)    silent=1 ;;
+      -V|--version)   printf 'which %s\n' "$VERSION"; return 0 ;;
+      -h|--help)
+        cat <<HELP
+which $VERSION - Locate executables in PATH
 
 Usage: which [OPTIONS] [--] command ...
 
@@ -25,20 +42,15 @@ Options:
 
 Exit: 0=found, 1=not found, 2=bad option
 HELP
-  }
-
-  while (($#)); do
-    case $1 in
-      -a|--all)       allmatches=1 ;;
-      -c|--canonical) canonical=1 ;;
-      -s|--silent)    silent=1 ;;
-      -V|--version)   printf 'which 2.0\n'; return 0 ;;
-      -h|--help)      _which_help; return 0 ;;
+        return 0 ;;
       --)             shift; targets+=("$@"); break ;;
       # Split combined short options: -ac → -a -c
       -[acsVh]?*)     set -- "${1:0:2}" "-${1:2}" "${@:2}"; continue ;;
+      # First operand ends option parsing (debianutils getopts parity): a bare
+      # '-' or any non-option argument, and everything after it, are literal targets.
+      -)              targets+=("$@"); break ;;
       -*)             >&2 printf 'Illegal option %s\n' "${1@Q}"; return 2 ;;
-      *)              targets+=("$1") ;;
+      *)              targets+=("$@"); break ;;
     esac
     shift
   done
@@ -46,7 +58,7 @@ HELP
   ((${#targets[@]})) || return 1
 
   # POSIX: trailing colon means current directory — guard for read -ra
-  local _path=${PATH:-}
+  local -- _path=${PATH:-}
   [[ $_path != *: ]] || _path+=':'
   IFS=':' read -ra path_dirs <<< "$_path"
 
@@ -56,7 +68,8 @@ HELP
     if [[ $target == */* ]]; then
       if [[ -f $target && -x $target ]]; then
         if ((canonical)); then
-          if resolved=$(realpath -- "$target" 2>/dev/null); then
+          # Pin PATH so realpath cannot be hijacked by the PATH being searched
+          if resolved=$(PATH=/usr/bin:/bin realpath -- "$target" 2>/dev/null) && [[ -n $resolved ]]; then
             ((silent)) || printf '%s\n' "$resolved"
             found=1
           else
@@ -74,11 +87,12 @@ HELP
     for path in "${path_dirs[@]}"; do
       # POSIX: empty PATH element means current directory
       [[ -n $path ]] || path='.'
-      full_path="${path%/}"/"$target"
+      full_path="$path/$target"
 
       if [[ -f $full_path && -x $full_path ]]; then
         if ((canonical)); then
-          if resolved=$(realpath -- "$full_path" 2>/dev/null); then
+          # Pin PATH so realpath cannot be hijacked by the PATH being searched
+          if resolved=$(PATH=/usr/bin:/bin realpath -- "$full_path" 2>/dev/null) && [[ -n $resolved ]]; then
             ((silent)) || printf '%s\n' "$resolved"
             found=1
           else
@@ -95,10 +109,12 @@ HELP
     ((found)) || allret=1
   done
 
-  return $allret
+  return "$allret"
 }
-# Export function to subshells
-declare -fx which
+# Deliberately NOT 'declare -fx which' (BCS0404 deviation): exporting the function
+# shadows the system which in every child bash and leaks this implementation's
+# semantics. Sourced callers still get which() in their own shell; children of
+# those shells resolve the real which binary on PATH.
 
 # --- source fence ---
 return 0 2>/dev/null || {
@@ -108,4 +124,4 @@ return 0 2>/dev/null || {
   which "$@"
 }
 
-#end
+#fin

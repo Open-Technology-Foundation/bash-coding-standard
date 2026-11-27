@@ -1,140 +1,82 @@
 # post_slug Testing Suite
 
-This directory contains the comprehensive testing suite for the post_slug multi-language slug generator library.
+Tests for the five post_slug implementations: Python, JavaScript, PHP, Bash
+and C.
 
-## Test Components
+## Cross-Language Validation (`validate_slug_scripts`)
 
-### 1. Cross-Language Validation (`validate_slug_scripts`)
-The main validation script that ensures all four implementations (Python, JavaScript, PHP, Bash) produce identical output.
+Checks that every available implementation gives the same slug for each line
+of a text file, for each separator and case setting.
 
-**Usage:**
 ```bash
 ./validate_slug_scripts datasets/headlines.txt
-./validate_slug_scripts -q datasets/booktitles.txt  # Quiet mode (errors only)
-./validate_slug_scripts datasets/products.txt 0 '-' 1  # With case preservation
+./validate_slug_scripts -q datasets/booktitles.txt       # report mismatches only
+./validate_slug_scripts datasets/products.txt 0 '-' 1    # max_len 0, sep '-', preserve case
+./validate_slug_scripts datasets/booktitles.txt 0 '_,-,|' 0,1
 ```
 
-### 2. Test Datasets
+Arguments are positional: `textfile [max_len [seps [cases]]]`. Separators
+default to `_,-` and case settings to `0,1`. Each implementation starts once
+per combination and reads every line from stdin, so a full run over the
+9,828 headlines takes about 7 seconds. The C binary is rebuilt with
+`make build` first when its source has changed.
 
-Located in the `datasets/` directory:
+Exit status: 0 when all slugs agree, 1 when any differ (each mismatch is
+reported on stderr with every implementation's slug), 2 for a usage error,
+3 when the text file is missing, and 22 for an invalid argument. Run from a
+terminal, it offers to open the text file in `$EDITOR` at each mismatching
+line.
 
-- **headlines.txt** - News headlines with currency symbols, punctuation, and special formatting
-- **booktitles.txt** - Book titles with international characters and complex punctuation
-- **products.txt** - E-commerce product names with technical specifications
-- **edge_cases.txt** - Comprehensive edge cases including:
-  - 255 character limit testing
-  - HTML entity handling
-  - Non-Latin scripts
-  - Special characters and regex patterns
-  - Empty and whitespace strings
-  - Real-world problematic titles
+## Command-Line Drivers (`_post_slug.*`)
 
-### 3. Unit Tests
+One small driver per interpreted language. Each loads its module the
+documented way (`import`, `require`, `require_once`, `source`) and takes the
+same arguments as the C binary:
 
-#### Python Unit Tests (`test_post_slug.py`)
-Comprehensive unit tests using Python's unittest framework:
 ```bash
-python test_post_slug.py
+./_post_slug.py "Barnes &amp; Noble"        # barnes-noble
+./_post_slug.js "Test Case" .               # test.case
+./_post_slug.php "Hello, World!" _ 1        # Hello_World
+./_post_slug.sh --stdin - 0 0 < datasets/edge_cases.txt   # one slug per line
 ```
 
-Tests include:
-- 255 character input limit validation
-- HTML entity replacement with separator
-- Error handling and empty string returns
-- Case preservation options
-- Custom separator characters
-- Real-world use cases
+`--stdin` prints exactly one line per input line, empty lines included. The
+validator and the unit tests both use these drivers; `../c/_post_slug` is
+the C equivalent.
 
-#### Focused Feature Tests (`test_focused.sh`)
-Quick test of key new features:
+## Unit Tests (`test_post_slug.py`)
+
+Each test runs every implementation on one input and checks that all give
+the expected slug. The C binary takes part once built (`cd ../c && make build`).
+
 ```bash
-./test_focused.sh
+python3 -m pytest test_post_slug.py
+python3 test_post_slug.py
 ```
 
-#### New Features Test (`test_new_features.sh`)
-Comprehensive test of all new functionality:
-```bash
-./test_new_features.sh
-```
+They cover the 255-character limit (in characters, including multibyte and
+emoji input), HTML entities, the deletion of characters with no ASCII form,
+separators, case preservation, locale independence, invalid UTF-8, and
+real-world titles.
 
-## Testing New Features (v1.0.1)
+## Test Datasets
 
-### 1. Input Length Limit (255 characters)
-All implementations now enforce a 255 character limit on input strings for filesystem compatibility:
-```bash
-# Test with over 255 chars
-echo "$(printf 'a%.0s' {1..300})" | ./_post_slug.py -
-# Output will be exactly 255 'a' characters
-```
+In `datasets/`:
 
-### 2. HTML Entity Handling
-HTML entities are now consistently replaced with the separator character:
-```bash
-./_post_slug.py "Barnes &amp; Noble"
-# Output: "barnes-noble"
+- **headlines.txt** - News headlines with currency symbols, punctuation and
+  double-encoded (mojibake) text
+- **booktitles.txt** - Book titles with international characters and complex
+  punctuation
+- **products.txt** - Product names with technical specifications
+- **edge_cases.txt** - The 255-character limit, HTML entities, non-Latin
+  scripts, regex metacharacters, empty and whitespace strings
 
-./_post_slug.py "AT&amp;T &copy; 2024"
-# Output: "at-t-2024"
-```
-
-### 3. Error Handling
-All implementations return empty string on error:
-```bash
-# Non-Latin script
-./_post_slug.py "Привет мир"
-# Output: ""
-
-# Only special characters
-./_post_slug.py "!@#$%^&*()"
-# Output: ""
-```
-
-### 4. Regex Escaping (JavaScript)
-The JavaScript implementation now properly escapes regex special characters in separators:
-```bash
-./_post_slug.js "Test Case" "."
-# Output: "test.case"
-
-./_post_slug.js "Test Case" "+"
-# Output: "test+case"
-```
-
-## Running All Tests
-
-To run the complete test suite:
-```bash
-# 1. Run cross-language validation on all datasets
-./validate_slug_scripts datasets/headlines.txt
-./validate_slug_scripts datasets/booktitles.txt
-./validate_slug_scripts datasets/products.txt
-./validate_slug_scripts datasets/edge_cases.txt
-
-# 2. Run Python unit tests
-python test_post_slug.py
-
-# 3. Run focused feature tests
-./test_focused.sh
-```
-
-## Adding New Tests
-
-To add new test cases:
-
-1. **For edge cases**: Add lines to `datasets/edge_cases.txt`
-2. **For unit tests**: Add test methods to `test_post_slug.py`
-3. **For cross-language validation**: Add to appropriate dataset file
-
-## Expected Behavior
-
-All implementations should:
-1. Produce identical output for the same input
-2. Limit input to 255 characters
-3. Replace HTML entities with separator character
-4. Return empty string on errors
-5. Support custom separators and case preservation
+To add a case, add a line to the dataset that fits it, or a method to
+`test_post_slug.py`.
 
 ## Known Limitations
 
-- Non-Latin scripts (Cyrillic, Chinese, Arabic) result in empty strings
-- Some Unicode transliteration differences exist between implementations
-- These are documented and expected behaviors
+- Non-Latin scripts (Cyrillic, Chinese, Arabic) give an empty slug.
+- The implementations agree on every dataset line, but Python and JavaScript
+  (NFKD) and PHP, Bash and C (glibc iconv) still differ on about 700 rare
+  Unicode characters. See the main README.

@@ -51,8 +51,9 @@ spacetime() {
     curtime=${curtime//\{\{timezone\}\}/$timezone}
   fi
 
-  # Output the formatted time
-  echo "$curtime"
+  # Output the formatted time; printf, because echo would treat a template
+  # beginning with -n/-e as an option
+  printf '%s\n' "$curtime"
 
   # Store the result in the global variable for later reference
   #shellcheck disable=SC2034
@@ -65,25 +66,27 @@ spacetime() {
 # If script is executed directly (not sourced), run spacetime with arguments
 set -euo pipefail
 shopt -s inherit_errexit
+# Set below the source fence so a sourcing shell keeps its own PATH
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
-declare -r VERSION='1.1.0'
+declare -r VERSION='1.2.0'
 declare -r SCRIPT_NAME=${0##*/}
 
-if [[ ${1:-} =~ ^(-V|--version)$ ]]; then
-  echo "$SCRIPT_NAME $VERSION"
-  exit 0
-fi
-
-if [[ ${1:-} =~ ^(-h|--help)$ ]]; then
+show_help() {
   cat <<HELP
 $SCRIPT_NAME $VERSION - Format and display current time with template support
 
-Usage: $SCRIPT_NAME [template]
+Usage: $SCRIPT_NAME [options] [--] [template]
 
 Without arguments: Returns formatted time as
   "DayOfWeek YYYY-MM-DD HH:MM:SS TZ Timezone"
 
 With template: Returns custom format using placeholders
+
+Options:
+  -V, --version  Show version and exit
+  -h, --help     Show this help and exit
+  --             End of options; required before a template beginning with '-'
 
 Placeholders:
   {{dow}}      - Day of week (e.g., Monday)
@@ -97,9 +100,20 @@ Examples:
   TZ=UTC $SCRIPT_NAME
   $SCRIPT_NAME "{{date}} at {{time}}"
   $SCRIPT_NAME "Log entry: {{dow}} {{date}} {{time}} {{tz}}"
+  $SCRIPT_NAME -- "-- {{date}} --"
 HELP
-  exit 0
-fi
+}
 
-spacetime "$@"
+declare -a args=()
+while (($#)); do case $1 in
+  -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
+  -h|--help)    show_help; exit 0 ;;
+  --)           shift; args+=("$@"); break ;;
+  -*)           >&2 printf '%s: invalid option %s (use -- before a template beginning with -)\n' \
+                  "$SCRIPT_NAME" "${1@Q}"
+                exit 22 ;;
+  *)            args+=("$1") ;;
+esac; shift; done
+
+spacetime "${args[@]}"
 #fin

@@ -64,23 +64,33 @@ function spacetime(?string $template = null): string {
 
 // If script is executed directly, run spacetime with arguments
 if (basename(__FILE__) === basename($_SERVER['SCRIPT_FILENAME'] ?? '')) {
-  $VERSION = '1.1.0';
+  $VERSION = '1.2.0';
+  $script_name = basename(__FILE__);
 
-  if (isset($argv[1]) && in_array($argv[1], ['-V', '--version'])) {
-    echo basename(__FILE__) . " $VERSION\n";
-    exit(0);
-  }
-
-  if (isset($argv[1]) && in_array($argv[1], ['-h', '--help'])) {
-    echo <<<'EOF'
+  // Same rules as the Bash parse loop: options anywhere, '--' ends options,
+  // any other dash-leading argument is an error (exit 22)
+  $positional = [];
+  $args = array_slice($argv, 1);
+  foreach ($args as $i => $arg) {
+    if ($arg === '-V' || $arg === '--version') {
+      echo "$script_name $VERSION\n";
+      exit(0);
+    }
+    if ($arg === '-h' || $arg === '--help') {
+      echo <<<'EOF'
 spacetime - Format and display current time with template support
 
-Usage: spacetime [template]
+Usage: spacetime [options] [--] [template]
 
 Without arguments: Returns formatted time as
   "DayOfWeek YYYY-MM-DD HH:MM:SS TZ Timezone"
 
 With template: Returns custom format using placeholders
+
+Options:
+  -V, --version  Show version and exit
+  -h, --help     Show this help and exit
+  --             End of options; required before a template beginning with '-'
 
 Placeholders:
   {{dow}}      - Day of week (e.g., Monday)
@@ -94,12 +104,24 @@ Examples:
   TZ=UTC spacetime.php
   spacetime.php "{{date}} at {{time}}"
   spacetime.php "Log entry: {{dow}} {{date}} {{time}} {{tz}}"
+  spacetime.php -- "-- {{date}} --"
 EOF;
-    echo "\n";
-    exit(0);
+      echo "\n";
+      exit(0);
+    }
+    if ($arg === '--') {
+      array_push($positional, ...array_slice($args, $i + 1));
+      break;
+    }
+    if (str_starts_with($arg, '-')) {
+      $quoted = "'" . str_replace("'", "'\\''", $arg) . "'";
+      fwrite(STDERR, "$script_name: invalid option $quoted (use -- before a template beginning with -)\n");
+      exit(22);
+    }
+    $positional[] = $arg;
   }
 
-  echo spacetime($argv[1] ?? null) . "\n";
+  echo spacetime($positional[0] ?? null) . "\n";
 }
 
 #fin

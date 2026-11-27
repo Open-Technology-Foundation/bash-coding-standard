@@ -20,8 +20,11 @@
  * @param {number} maxLen - The maximum length for the slug (default: 0 = no limit beyond 255 char input limit).
  * @returns {string} - The resulting slug, or empty string on error.
  * 
- * @version 1.0.1
+ * @version 1.1.0
  * @changelog
+ * 1.1.0 - 255 limit counts code points, not UTF-16 units; HTML entity
+ *         match ends at the first ';'; '£' becomes 'GBP'; exported via
+ *         module.exports for Node.
  * 1.0.1 - Added 255 character input limit, fixed HTML entity handling, 
  *         improved regex escaping, added try-catch error handling.
  * 1.0.0 - Initial release
@@ -63,6 +66,7 @@ const multiCharReplacements = {
   'â�¹': 'Rs',
   '�': '-',
   '€': 'EUR',  // Euro symbol - match iconv transliteration
+  '£': 'GBP',  // Pound sign - match iconv transliteration
   '©': 'C',    // Copyright symbol
   '®': 'R',    // Registered trademark
 };
@@ -73,9 +77,11 @@ function post_slug(inputStr, sepChar = "-", preserveCase = false, maxLen = 0) {
     if (sepChar == '') sepChar = '-';
     sepChar = sepChar[0]
     
-    // Limit input to 255 characters
-    if (inputStr.length > 255) {
-      inputStr = inputStr.substring(0, 255);
+    // Limit input to 255 characters (code points, as in the other modules;
+    // .length counts UTF-16 units and would split a surrogate pair)
+    const codePoints = Array.from(inputStr);
+    if (codePoints.length > 255) {
+      inputStr = codePoints.slice(0, 255).join('');
     }
     
     // Kludges to increase cross platform slug similiarity.
@@ -94,11 +100,12 @@ function post_slug(inputStr, sepChar = "-", preserveCase = false, maxLen = 0) {
     inputStr = inputStr.replace(regex, newStr);
   }
 
-  // Remove all HTML entities.
-  inputStr = inputStr.replace(/&[^ \t]*;/g, sepChar);
-  
+  // Remove all HTML entities; an entity ends at the first ';'.
+  inputStr = inputStr.replace(/&[^ \t;]*;/g, sepChar);
+
   // Force all characters in `input_str` to ASCII (or closest representation).
-  inputStr = inputStr.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  // Characters with no ASCII form are deleted, as in the other modules.
+  inputStr = inputStr.normalize("NFKD").replace(/[^\x00-\x7F]/g, "");
 
   // Remove quotes, apostrophes, and backticks.
   inputStr = inputStr.replace(/[`'"’´]/g, "");
@@ -134,6 +141,12 @@ function post_slug(inputStr, sepChar = "-", preserveCase = false, maxLen = 0) {
   } catch (e) {
     return "";
   }
+}
+
+// CommonJS export, so `const { post_slug } = require('./post_slug.js')` works.
+// The guard keeps the file usable as a plain <script> in a browser.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { post_slug };
 }
 
 //fin

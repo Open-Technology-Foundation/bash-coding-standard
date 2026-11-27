@@ -1,106 +1,141 @@
 #!/bin/bash
-#shellcheck disable=SC1091
-# slug-files - Batch rename files to URL/filename-friendly slugs
+# slugify-files - Batch rename files to URL/filename-friendly slugs
 set -euo pipefail
 shopt -s inherit_errexit shift_verbose extglob nullglob
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
-declare -r VERSION=1.0.0
-#shellcheck disable=SC2155
+declare -r VERSION=1.1.0
+#shellcheck disable=SC2155  # exit-on-error catches realpath failure
 declare -r SCRIPT_PATH=$(realpath -- "$0")
 declare -r SCRIPT_DIR=${SCRIPT_PATH%/*} SCRIPT_NAME=${SCRIPT_PATH##*/}
+# By path, not through PATH: the 'post_slug' command there may be the C
+# binary, which cannot be sourced.
+declare -r LIB_PATH=$SCRIPT_DIR/post_slug.bash
+# Separators allowed in a filename: never '/', which would move the file
+declare -r SEP_CHARS='-_.+~,=@'
 
-declare -i VERBOSE=1
+declare -i VERBOSE=1 FORCE=0 PRESERVE_CASE=0 MAX_LEN=0 CLOBBER=1
+declare -- SEP_CHAR='-'
+declare -a FILES=()
+
+_msg()  { >&2 printf "$SCRIPT_NAME: $1 %s\n" "${@:2}"; }
+info()  { ((VERBOSE)) || return 0; _msg '◉' "$@"; }
+warn()  { _msg '▲' "$@"; }
+error() { _msg '✗' "$@"; }
+die()   { (($# < 2)) || error "${@:2}"; exit "${1:-0}"; }
+noarg() { (($# > 1)) || die 22 "Option ${1@Q} requires an argument"; }
+
+yn() {
+  local -- REPLY=''
+  >&2 echo -n "$SCRIPT_NAME: ▲ ${1:-Continue?} y/n "
+  read -r -n 1 ||:   # EOF leaves REPLY empty, which counts as no
+  >&2 echo
+  [[ ${REPLY,,} == y ]]
+}
 
 show_help() {
   cat <<HELP
-Usage: $SCRIPT_NAME [-s|--sep_char CHAR] [-m|--max-len LEN] [-p|--preserve-case] [-n|--no-clobber] [-q|--quiet] file [file...]
+$SCRIPT_NAME $VERSION - Rename files to post_slug form, keeping each extension
 
-Rename files to post-slug format
+Usage: $SCRIPT_NAME [OPTIONS] file [file...]
+
+Options:
+  -s, --sep_char CHAR   Separator, one of: $SEP_CHARS (default -)
+  -m, --max-len LEN     Truncate slugs to LEN characters, at most 255 (0 = none)
+  -p, --preserve-case   Keep upper case
+  -n, --no-clobber      Skip a file whose new name already exists.
+                        Without -n, that existing file is OVERWRITTEN.
+  -f, --force           Rename without asking first
+  -v, --verbose         Report each rename (default)
+  -q, --quiet           Report only warnings and errors
+  -V, --version         Print version and exit
+  -h, --help            Print this help and exit
 
 eg: $SCRIPT_NAME -pn /a/directory/*.txt
 HELP
 }
 
-info() { >&2 echo "$SCRIPT_NAME:" "$1"; >&2 echo; }
-die() { >&2 echo "$SCRIPT_NAME:" 'error:' "$2"; exit "$1"; }
+[[ -f $LIB_PATH ]] || die 3 "Missing library ${LIB_PATH@Q}"
+#shellcheck source-path=SCRIPTDIR source=post_slug.bash
+source -- "$LIB_PATH" || die 1 "Cannot load ${LIB_PATH@Q}"
 
-declare -a Files=()
-declare -- sep_char='-'
-declare -i preserve_case=0 max_len=0 clobber=1
-declare -- file dirname ext newfile
+main() {
+  local -- file path name ext slug newfile
+  local -a paths=()
 
-source post_slug
-#.bash 2>/dev/null || {
-#  source "$SCRIPT_DIR"/post_slug.bash || die 1 "post_slug.bash not found in PATH or $SCRIPT_DIR"
-#}
+  #bcscheck disable=BCS0806  # -p and -n predate BCS adoption; existing callers rely on them
+  while (($#)); do case $1 in
+    -s|--sep_char)      noarg "$@"; shift; SEP_CHAR=${1:--} ;;
+    -m|--max-len)       noarg "$@"; shift
+                        # Check before the integer assignment, which would evaluate 'a[$(cmd)]'
+                        [[ $1 =~ ^[0-9]+$ ]] || die 22 "max-len must be a non-negative integer, not ${1@Q}"
+                        MAX_LEN=10#$1
+                        ((MAX_LEN <= 255)) || MAX_LEN=255 ;;
+    -p|--preserve-case) PRESERVE_CASE=1 ;;
+    -n|--no-clobber)    CLOBBER=0 ;;
+    -f|--force)         FORCE=1 ;;
+    -v|--verbose)       VERBOSE=1 ;;
+    -q|--quiet)         VERBOSE=0 ;;
+    -V|--version)       echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
+    -h|--help)          show_help; exit 0 ;;
+    -[sm]?*)            set -- "${1:0:2}" "${1:2}" "${@:2}"; continue ;;  # -s_ is -s _
+    -[pnfvqVh]?*)       set -- "${1:0:2}" "-${1:2}" "${@:2}"; continue ;; # -pn is -p -n
+    -*)                 die 22 "Invalid option ${1@Q}" ;;
+    *)                  FILES+=("$1") ;;
+  esac; shift; done
+  [[ ${#SEP_CHAR} == 1 && $SEP_CHARS == *"$SEP_CHAR"* ]] \
+    || die 22 "Separator must be one of $SEP_CHARS, not ${SEP_CHAR@Q}"
+  readonly VERBOSE FORCE PRESERVE_CASE MAX_LEN CLOBBER SEP_CHAR FILES
 
-while (($#)); do case $1 in
-  -s|--sep_char)
-      shift
-      sep_char="${1:--}"
-      sep_char="${sep_char:0:1}"
-      ;;
-  -m|--max-len)
-      shift
-      max_len=${1:-0}
-      if ((max_len>255)); then
-        max_len=255
-      fi
-      if ((max_len<0)); then
-        max_len=0
-      fi
-      ;;
-  -p|--preserve-case)
-      preserve_case=1 ;;
-  -n|--no-clobber)
-      clobber=0 ;;
-  -v|--verbose)
-      VERBOSE=1 ;;
-  -q|--quiet)
-      VERBOSE=0 ;;
-  -h|--help)
-      show_help; exit 0 ;;
-  -[smpnvqh]?*) #split up single options
-      set -- "${1:0:2}" "-${1:2}" "${@:2}"; continue ;;
-  -*) die 22 "Invalid option ${1@Q}" ;;
-  *)  Files+=("$1") ;;
-esac; shift; done
+  ((${#FILES[@]})) || { >&2 show_help; die 2 'No files given'; }
 
-((${#Files[@]})) || die 1 'No files found.'
+  # Resolve every operand before renaming any, so a typo stops the run cleanly
+  for file in "${FILES[@]}"; do
+    path=$(realpath -e -- "$file" 2>/dev/null) || die 3 "File not found ${file@Q}"
+    paths+=("$path")
+  done
 
-info "WARNING: ${#Files[@]} files will be RENAMED in post-slug format!"
-read -rp "$SCRIPT_NAME: Proceed? y/n "; [[ $REPLY == y ]] || exit 1
->&2 echo
+  warn "${#paths[@]} files will be RENAMED to post_slug form"
+  ((FORCE)) || yn 'Proceed?' || die 1 'Cancelled; nothing renamed'
 
-for file in "${Files[@]}"; do
-  file=$(realpath -e -- "$file")
-  dirname=$(dirname -- "$file")
-  newfile=$(basename -- "$file")
-  ext=''
-  if [[ $newfile == *"."* ]]; then
-    ext=".${newfile##*.}"
-    newfile=$(basename -s "$ext" -- "$newfile")
-  fi
+  for file in "${paths[@]}"; do
+    # The same file named twice: the first pass already renamed it
+    [[ -e $file || -L $file ]] || { warn "${file@Q} no longer exists"; continue; }
 
-  slug=$(post_slug "$newfile" "$sep_char" "$preserve_case" "$max_len")
-  if [[ -z $slug ]]; then
-    info "WARNING: Zero length slug for ${file@Q}"
-    continue
-  fi
-  newfile="$dirname/$slug$ext"
+    name=${file##*/}
+    ext=''
+    if [[ $name == *.* ]]; then
+      ext=.${name##*.}
+      name=${name%"$ext"}
+    fi
 
-  if [[ $newfile == "$file" ]]; then
-    ((!VERBOSE)) || info "No change required for ${file@Q}"
-    continue
-  fi
+    slug=$(post_slug "$name" "$SEP_CHAR" "$PRESERVE_CASE" "$MAX_LEN") \
+      || die 1 "post_slug failed for ${file@Q}"
+    if [[ -z $slug ]]; then
+      warn "Zero-length slug for ${file@Q}; not renamed"
+      continue
+    fi
+    newfile=${file%/*}/$slug$ext
 
-  if [[ -f $newfile ]] && ((!clobber)); then
-    info "File '$(basename -- "$newfile")' already slugged"
-    continue
-  fi
+    if [[ $newfile == "$file" ]]; then
+      info "No change required for ${file@Q}"
+      continue
+    fi
+    # mv onto a directory would move the file into it
+    if [[ -d $newfile ]]; then
+      warn "${newfile@Q} is a directory; ${file@Q} not renamed"
+      continue
+    fi
+    if [[ -e $newfile ]] && ((!CLOBBER)); then
+      warn "${newfile@Q} already exists; ${file@Q} not renamed"
+      continue
+    fi
 
-  ((!VERBOSE)) || info "mv $file -> $newfile"
-  mv "$file" "$newfile" || die 1 "Error moving ${file@Q} to ${newfile@Q}"
-done
+    info "mv ${file@Q} -> ${newfile@Q}"
+    mv -T -- "$file" "$newfile" || die 1 "Cannot move ${file@Q} to ${newfile@Q}"
+  done
+}
+
+main "$@"
 
 #fin

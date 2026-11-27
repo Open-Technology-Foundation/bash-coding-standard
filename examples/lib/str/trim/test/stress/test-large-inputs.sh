@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 # Stress tests for large input handling
 
-set -uo pipefail
+set -euo pipefail
+shopt -s inherit_errexit
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
-TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$TEST_DIR/../.." && pwd)"
-source "$TEST_DIR/../utils.sh"
+declare -- TEST_DIR ROOT_DIR
+TEST_DIR=$(realpath -- "$(dirname -- "${BASH_SOURCE[0]}")") \
+  || { >&2 echo "${0##*/}: ✗ cannot resolve test directory"; exit 1; }
+ROOT_DIR=${TEST_DIR%/*/*}  # test/<category> -> project root
+[[ -f $ROOT_DIR/test/utils.sh ]] || { >&2 echo "${0##*/}: ✗ missing test/utils.sh"; exit 3; }
+#shellcheck source=test/utils.sh
+source -- "$ROOT_DIR"/test/utils.sh || { >&2 echo "${0##*/}: ✗ cannot source test/utils.sh"; exit 1; }
+test_init || { >&2 echo "${0##*/}: ✗ test_init failed"; exit 1; }
 
 TRIM="$ROOT_DIR/trim.bash"
 LTRIM="$ROOT_DIR/ltrim.bash"
@@ -13,10 +20,10 @@ RTRIM="$ROOT_DIR/rtrim.bash"
 
 # Verify utilities exist
 for util in "$TRIM" "$LTRIM" "$RTRIM"; do
-  [[ -x "$util" ]] || { echo "Error: $(basename "$util") not found"; exit 1; }
+  [[ -x "$util" ]] || { >&2 echo "${0##*/}: ✗ ${util@Q} not found or not executable"; exit 1; }
 done
 
-echo "Testing stress: large input handling..."
+>&2 echo "Testing stress: large input handling..."
 
 declare -i passed=0 failed=0
 
@@ -27,15 +34,15 @@ test_long_line() {
 
   # Create 1000 space padding and 98K char content
   padding=$(printf '%*s' 1000 '')
-  content=$(head -c 98000 < /dev/zero | tr '\0' 'x')
+  content=$(head -c 98000 < /dev/zero | tr '\0' 'x') || fail 'cannot build 98K content'
 
-  result=$("$TRIM" "${padding}${content}${padding}")
+  result=$("$TRIM" "${padding}${content}${padding}") || fail 'trim exited non-zero'
 
-  if [[ "${#result}" -eq 98000 ]]; then
+  if ((${#result} == 98000)); then
     echo -e "${GREEN}Test passed${NC}: $description"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: $description (got ${#result} chars)"
+    >&2 echo -e "${RED}Test failed${NC}: $description (got ${#result} chars)"
     ((++failed))
   fi
 }
@@ -44,22 +51,24 @@ test_long_line() {
 test_many_lines() {
   local -- description="Many lines (10K lines)"
   local -- tmp_file line_count
-  tmp_file=$(mktemp)
+  local -i i
+  tmp_file=$(mktemp -p "$TMP_DIR") || fail 'mktemp failed'
 
   # Create 10K lines with whitespace padding
   for ((i=0; i<10000; i++)); do
     echo "  line$i  "
-  done > "$tmp_file"
+  done > "$tmp_file" || fail 'cannot write temp file'
 
-  line_count=$("$TRIM" < "$tmp_file" | wc -l)
+  line_count=$("$TRIM" < "$tmp_file" | wc -l) || fail 'trim exited non-zero'
+  [[ $line_count =~ ^[0-9]+$ ]] || fail "wc -l gave non-integer ${line_count@Q}"
 
-  rm -f "$tmp_file"
+  rm -f -- "$tmp_file"
 
-  if [[ "$line_count" -eq 10000 ]]; then
+  if ((line_count == 10000)); then
     echo -e "${GREEN}Test passed${NC}: $description"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: $description (got $line_count lines)"
+    >&2 echo -e "${RED}Test failed${NC}: $description (got $line_count lines)"
     ((++failed))
   fi
 }
@@ -70,13 +79,13 @@ test_whitespace_only() {
   local -- input result
 
   input=$(printf '%*s' 100000 '')
-  result=$("$TRIM" "$input")
+  result=$("$TRIM" "$input") || fail 'trim exited non-zero'
 
   if [[ -z "$result" ]]; then
     echo -e "${GREEN}Test passed${NC}: $description"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: $description (result not empty)"
+    >&2 echo -e "${RED}Test failed${NC}: $description (result not empty)"
     ((++failed))
   fi
 }
@@ -93,7 +102,7 @@ test_mixed_whitespace_large() {
   input+="more"
   input+=$(printf '%*s' 10000 '')
 
-  result=$("$TRIM" "$input")
+  result=$("$TRIM" "$input") || fail 'trim exited non-zero'
 
   # Expected: content + squeezed tabs + more
   # Note: trim only removes leading/trailing, not internal
@@ -101,7 +110,7 @@ test_mixed_whitespace_large() {
     echo -e "${GREEN}Test passed${NC}: $description"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: $description"
+    >&2 echo -e "${RED}Test failed${NC}: $description"
     ((++failed))
   fi
 }
@@ -110,7 +119,8 @@ test_mixed_whitespace_large() {
 test_stdin_large() {
   local -- description="Large stdin (1000 lines x 1000 chars)"
   local -- tmp_file result_lines
-  tmp_file=$(mktemp)
+  local -i i
+  tmp_file=$(mktemp -p "$TMP_DIR") || fail 'mktemp failed'
 
   # Create 1000 lines of 1000 chars each
   local -- line_content
@@ -120,17 +130,18 @@ test_stdin_large() {
 
   for ((i=0; i<1000; i++)); do
     echo "$line_content"
-  done > "$tmp_file"
+  done > "$tmp_file" || fail 'cannot write temp file'
 
-  result_lines=$("$TRIM" < "$tmp_file" | wc -l)
+  result_lines=$("$TRIM" < "$tmp_file" | wc -l) || fail 'trim exited non-zero'
+  [[ $result_lines =~ ^[0-9]+$ ]] || fail "wc -l gave non-integer ${result_lines@Q}"
 
-  rm -f "$tmp_file"
+  rm -f -- "$tmp_file"
 
-  if [[ "$result_lines" -eq 1000 ]]; then
+  if ((result_lines == 1000)); then
     echo -e "${GREEN}Test passed${NC}: $description"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: $description (got $result_lines lines)"
+    >&2 echo -e "${RED}Test failed${NC}: $description (got $result_lines lines)"
     ((++failed))
   fi
 }
@@ -143,13 +154,13 @@ test_ltrim_large_leading() {
   input=$(printf '%*s' 50000 '')
   input+="content"
 
-  result=$("$LTRIM" "$input")
+  result=$("$LTRIM" "$input") || fail 'ltrim exited non-zero'
 
   if [[ "$result" == "content" ]]; then
     echo -e "${GREEN}Test passed${NC}: $description"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: $description"
+    >&2 echo -e "${RED}Test failed${NC}: $description"
     ((++failed))
   fi
 }
@@ -162,13 +173,13 @@ test_rtrim_large_trailing() {
   input="content"
   input+=$(printf '%*s' 50000 '')
 
-  result=$("$RTRIM" "$input")
+  result=$("$RTRIM" "$input") || fail 'rtrim exited non-zero'
 
   if [[ "$result" == "content" ]]; then
     echo -e "${GREEN}Test passed${NC}: $description"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: $description"
+    >&2 echo -e "${RED}Test failed${NC}: $description"
     ((++failed))
   fi
 }
@@ -177,25 +188,26 @@ test_rtrim_large_trailing() {
 test_no_timeout() {
   local -- description="No timeout on large input (5s limit)"
   local -- tmp_file start_time end_time duration
-  tmp_file=$(mktemp)
+  local -i i
+  tmp_file=$(mktemp -p "$TMP_DIR") || fail 'mktemp failed'
 
   # Create reasonably large file (5000 lines)
   for ((i=0; i<5000; i++)); do
     echo "    line $i with some content    "
-  done > "$tmp_file"
+  done > "$tmp_file" || fail 'cannot write temp file'
 
-  start_time=$(date +%s)
-  "$TRIM" < "$tmp_file" > /dev/null
-  end_time=$(date +%s)
+  printf -v start_time '%(%s)T' -1
+  "$TRIM" < "$tmp_file" > /dev/null || fail 'trim exited non-zero'
+  printf -v end_time '%(%s)T' -1
   duration=$((end_time - start_time))
 
-  rm -f "$tmp_file"
+  rm -f -- "$tmp_file"
 
-  if [[ "$duration" -lt 5 ]]; then
+  if ((duration < 5)); then
     echo -e "${GREEN}Test passed${NC}: $description (${duration}s)"
     ((++passed))
   else
-    echo -e "${RED}Test failed${NC}: $description (took ${duration}s)"
+    >&2 echo -e "${RED}Test failed${NC}: $description (took ${duration}s)"
     ((++failed))
   fi
 }
@@ -213,7 +225,12 @@ test_no_timeout
 echo
 echo "=== Summary: $passed passed, $failed failed ==="
 
-((failed == 0)) && echo "All stress tests passed!" && exit 0
-echo "Stress tests FAILED" && exit 1
+if ((failed == 0)); then
+  echo "All stress tests passed!"
+  exit 0
+else
+  >&2 echo "Stress tests FAILED"
+  exit 1
+fi
 
 #fin

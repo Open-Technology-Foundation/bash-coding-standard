@@ -1,22 +1,38 @@
 #!/bin/bash
+#shellcheck disable=SC2317,SC2329  # code after the BCS0406 source fence runs in script mode only
 # elapsed_time: Format time duration as human-readable string
 
 # --- Function (safe to source) ---
-
 elapsed_time() {
   # Convert decimal seconds to integer microseconds via nameref (zero-fork)
   _to_us() {
     local -n _result=$1
     local -- val=$2 int_part frac_part
 
-    int_part=${val%%.*}
-    if [[ $val == *.* ]]; then
-      frac_part=${val#*.}
+    # Validate before arithmetic sees it; accept ',' because EPOCHREALTIME uses
+    # the locale's decimal point (id_ID), which $(( )) would read as the comma
+    # operator. extglob is always on inside [[ ]], so this works when sourced.
+    [[ $val == +([0-9])?([.,]+([0-9])) ]] || {
+      >&2 printf 'elapsed_time: Invalid time %s\n' "${val@Q}"
+      return 22
+    }
+
+    int_part=${val%%[.,]*}
+    if [[ $val == *[.,]* ]]; then
+      frac_part=${val#*[.,]}
     else
       frac_part=0
     fi
 
-    # Pad/truncate fractional part to exactly 6 digits
+    # Over 12 significant digits, seconds * 1000000 wraps 64-bit arithmetic
+    # (12 digits is ~31,700 years); leading zeros are stripped so they don't count
+    while [[ $int_part == 0?* ]]; do int_part=${int_part#0}; done
+    ((${#int_part} <= 12)) || {
+      >&2 printf 'elapsed_time: Time out of range %s (max 12 integer digits)\n' "${val@Q}"
+      return 22
+    }
+
+    # Six digits = microsecond resolution; finer digits are dropped
     frac_part="$frac_part"000000
     frac_part=${frac_part:0:6}
 
@@ -26,33 +42,41 @@ elapsed_time() {
 
   local -- start_time=${1:-0} end_time=${2:-$EPOCHREALTIME}
 
-  local -i start_us end_us remaining_us
-  _to_us start_us "$start_time"
-  _to_us end_us "$end_time"
-  remaining_us=$((end_us - start_us))
+  local -i start_us end_us diff_us remaining_ms
+  _to_us start_us "$start_time" || return
+  _to_us end_us "$end_time" || return
+  diff_us=$((end_us - start_us))
+
+  # Round to milliseconds before splitting, so 59.9996s carries into the
+  # minute instead of printing as 60.000s (half away from zero)
+  if ((diff_us < 0)); then
+    remaining_ms=$(( (diff_us - 500) / 1000 ))
+  else
+    remaining_ms=$(( (diff_us + 500) / 1000 ))
+  fi
 
   local -i days hours minutes
 
-  days=$((remaining_us / 86400000000))
+  days=$((remaining_ms / 86400000))
   if ((days)); then
     printf '%dd ' "$days"
-    remaining_us=$((remaining_us - days * 86400000000))
+    remaining_ms=$((remaining_ms - days * 86400000))
   fi
 
-  hours=$((remaining_us / 3600000000))
+  hours=$((remaining_ms / 3600000))
   if ((hours || days)); then
     printf '%02dh ' "$hours"
-    remaining_us=$((remaining_us - hours * 3600000000))
+    remaining_ms=$((remaining_ms - hours * 3600000))
   fi
 
-  minutes=$((remaining_us / 60000000))
+  minutes=$((remaining_ms / 60000))
   if ((minutes || hours || days)); then
     printf '%02dm ' "$minutes"
-    remaining_us=$((remaining_us - minutes * 60000000))
+    remaining_ms=$((remaining_ms - minutes * 60000))
   fi
 
-  # Xe-6 = scientific notation for µs→s conversion
-  printf '%.3fs\n' "${remaining_us}e-6"
+  # Xe-3 = scientific notation for ms→s conversion
+  printf '%.3fs\n' "${remaining_ms}e-3"
 }
 declare -fx elapsed_time
 
@@ -63,18 +87,23 @@ return 0 2>/dev/null ||:
 set -euo pipefail
 shopt -s inherit_errexit
 
-declare -r VERSION='1.1.0' SCRIPT_NAME=${0##*/}
+### VERSION managed by version
+declare -r VERSION=1.2.0
+###
+declare -r SCRIPT_NAME=${0##*/}
 
 die() { (($# < 2)) || >&2 printf '%s: %s\n' "$SCRIPT_NAME" "${*:2}"; exit "${1:-0}"; }
 
 show_help() {
-  cat <<HELP
+  # read + printf instead of cat: keeps the script builtin-only (zero-dep)
+  local -- help
+  IFS= read -r -d '' help <<HELP ||:  # read -d '' returns 1 at end of input
 $SCRIPT_NAME $VERSION - Return time duration as human-readable string
 
 Use \$EPOCHREALTIME to return micro-second resolution time duration
 as human-readable string.
 
-Use \$EPOCHTIME or \$SECONDS to return second resolution time duration
+Use \$EPOCHSECONDS or \$SECONDS to return second resolution time duration
 as human-readable string.
 
 Usage: $SCRIPT_NAME start_time [end_time]
@@ -85,11 +114,12 @@ Examples:
   elapsed_time "\$start"    # automatic end time
 
   # explicit start/end times:
-  elapsed_time 0 3661.123  # Output: "01h 01m 01.123s"
+  elapsed_time 0 3661.123  # Output: "01h 01m 1.123s"
 
   # elapsed time since start of Unix epoch
   TZ=UTC0 elapsed_time 0   # > 20552d 04h 06m 36.512s
 HELP
+  printf '%s' "$help"
 }
 
 while (($#)); do
@@ -103,7 +133,7 @@ while (($#)); do
   shift
 done
 
-(($#)) || { >&2 show_help; exit 1; }
+(($#)) || { >&2 show_help; die 2; }
 
 elapsed_time "$@"
 #fin

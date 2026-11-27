@@ -14,8 +14,7 @@ This test suite ensures the correctness and reliability of all trim utilities th
 ├── utils.sh                    # Common test utilities and assertion functions
 ├── fixtures/                   # Test data files
 │   ├── input/                  # Input test files with various content types
-│   ├── expected/               # Expected output files for verification
-│   └── tmp/                    # Temporary files created during test execution
+│   └── expected/               # Expected output files for verification
 ├── unit/                       # Individual utility tests
 │   ├── test-trim.sh            # Tests for trim utility
 │   ├── test-ltrim.sh           # Tests for ltrim utility
@@ -91,15 +90,17 @@ The test suite provides comprehensive coverage across multiple dimensions:
 
 ## Test Utilities
 
-The `utils.sh` script provides helper functions for all tests:
+`utils.sh` is a sourced library of helpers for all tests. It only defines functions and colour variables; a test calls `test_init` after sourcing it. Pass lines go to stdout and failure details to stderr.
 
 | Function | Purpose |
 |----------|---------|
+| `test_init` | Set `FIXTURES_DIR`, create a private `TMP_DIR` (`mktemp -d`) and remove it on exit |
+| `fail` | Report a failed step on stderr and return 1: `out=$(cmd) \|\| fail 'cmd failed'` |
 | `assert_equals` | Compare two strings and report success/failure |
 | `assert_file_equals` | Compare contents of two files with diff reporting |
-| `create_temp_file` | Generate temporary file with specified content |
-| `create_temp_multiline_file` | Create multiline temp files from stdin |
-| `cleanup_temp_files` | Remove temporary test artifacts |
+| `create_temp_file` | Generate a temporary file in `TMP_DIR` with specified content |
+| `create_temp_multiline_file` | Create a multiline temp file in `TMP_DIR` from stdin |
+| `cleanup_temp_files` | Remove `TMP_DIR` (the EXIT trap set by `test_init`) |
 
 ## Adding New Tests
 
@@ -111,17 +112,26 @@ To extend the test coverage:
 2. Follow the existing pattern:
    ```bash
    #!/usr/bin/env bash
+   # Unit tests for <feature>
+
    set -euo pipefail
-   
-   # Source test utilities
-   TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-   ROOT_DIR="$(cd "$TEST_DIR/../.." && pwd)"
-   source "$TEST_DIR/../utils.sh"
-   
+   shopt -s inherit_errexit
+   declare -rx PATH=/usr/local/bin:/usr/bin:/bin
+
+   declare -- TEST_DIR ROOT_DIR
+   TEST_DIR=$(realpath -- "$(dirname -- "${BASH_SOURCE[0]}")") \
+     || { >&2 echo "${0##*/}: ✗ cannot resolve test directory"; exit 1; }
+   ROOT_DIR=${TEST_DIR%/*/*}  # test/<category> -> project root
+   [[ -f $ROOT_DIR/test/utils.sh ]] || { >&2 echo "${0##*/}: ✗ missing test/utils.sh"; exit 3; }
+   #shellcheck source=test/utils.sh
+   source -- "$ROOT_DIR"/test/utils.sh || { >&2 echo "${0##*/}: ✗ cannot source test/utils.sh"; exit 1; }
+   test_init || { >&2 echo "${0##*/}: ✗ test_init failed"; exit 1; }
+
    # Define test functions
    test_feature_one() {
-     # Test implementation
-     assert_equals "actual" "expected" "Description"
+     local -- actual
+     actual=$("$ROOT_DIR"/trim.bash "  input  ") || fail 'trim exited non-zero'
+     assert_equals "$actual" "input" "Description"
    }
    
    # Run tests

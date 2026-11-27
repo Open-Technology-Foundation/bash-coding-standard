@@ -18,7 +18,7 @@ import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-__version__ = '1.1.0'
+__version__ = '1.2.0'
 __all__ = ['spacetime', 'EPOCHSPACETIME', '__version__']
 
 EPOCHSPACETIME: str = ''
@@ -100,12 +100,17 @@ def spacetime(template: str | None = None) -> str:
 _HELP_TEMPLATE = '''\
 __NAME__ __VERSION__ - Format and display current time with template support
 
-Usage: __NAME__ [template]
+Usage: __NAME__ [options] [--] [template]
 
 Without arguments: Returns formatted time as
   "DayOfWeek YYYY-MM-DD HH:MM:SS TZ Timezone"
 
 With template: Returns custom format using placeholders
+
+Options:
+  -V, --version  Show version and exit
+  -h, --help     Show this help and exit
+  --             End of options; required before a template beginning with '-'
 
 Placeholders:
   {{dow}}      - Day of week (e.g., Monday)
@@ -118,22 +123,34 @@ Examples:
   __NAME__
   TZ=UTC __NAME__
   __NAME__ "{{date}} at {{time}}"
-  __NAME__ "Log entry: {{dow}} {{date}} {{time}} {{tz}}"'''
+  __NAME__ "Log entry: {{dow}} {{date}} {{time}} {{tz}}"
+  __NAME__ -- "-- {{date}} --"'''
 
 
 def _main(argv: list[str]) -> int:
   script_name = os.path.basename(argv[0]) if argv else 'spacetime.py'
+  # Same rules as the Bash parse loop: options anywhere, '--' ends options,
+  # any other dash-leading argument is an error (exit 22)
+  positional: list[str] = []
   args = argv[1:]
+  for i, arg in enumerate(args):
+    if arg in ('-V', '--version'):
+      print(f'{script_name} {__version__}')
+      return 0
+    if arg in ('-h', '--help'):
+      print(_HELP_TEMPLATE.replace('__NAME__', script_name).replace('__VERSION__', __version__))
+      return 0
+    if arg == '--':
+      positional.extend(args[i + 1:])
+      break
+    if arg.startswith('-'):
+      quoted = "'" + arg.replace("'", "'\\''") + "'"
+      print(f'{script_name}: invalid option {quoted} (use -- before a template beginning with -)',
+            file=sys.stderr)
+      return 22
+    positional.append(arg)
 
-  if args and args[0] in ('-V', '--version'):
-    print(f'{script_name} {__version__}')
-    return 0
-
-  if args and args[0] in ('-h', '--help'):
-    print(_HELP_TEMPLATE.replace('__NAME__', script_name).replace('__VERSION__', __version__))
-    return 0
-
-  template = args[0] if args else None
+  template = positional[0] if positional else None
   print(spacetime(template))
   return 0
 

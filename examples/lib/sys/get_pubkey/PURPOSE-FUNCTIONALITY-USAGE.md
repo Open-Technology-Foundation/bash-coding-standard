@@ -13,16 +13,19 @@ Prints the current user's first available SSH public key, checking in preference
 - **Function**: `get_pubkey()`
 - **Exit 0**: Key found and printed to stdout
 - **Exit 1**: No readable public key found
+- **Exit 2**: USER not found
+- **Exit 22**: Invalid option or too many arguments
 - **Dual-mode**: Sourceable as a library (`source get-pubkey`) or executable directly
 
 ### `is-authorized-pubkey`
 
-Checks whether a given public key exists in an `authorized_keys` file. Extracts the key blob (type + base64) from the input and performs a `grep` match.
+Checks whether a given public key exists in an `authorized_keys` file. Validates the key type and base64 key data, then looks for that exact `type blob` pair of words in each non-comment line.
 
 - **Function**: `is_authorized_pubkey(payload)`
 - **Input**: A string containing a public key (optionally prefixed with a MAC header separated by `|`)
 - **Exit 0**: Key found in authorized_keys
 - **Exit 1**: Key not found, or authorized_keys unreadable
+- **Exit 22**: Invalid option, missing or malformed PUBKEY
 - **Configurable**: `AUTHORIZED_KEYS_FILE` env var (default: `~/.ssh/authorized_keys`)
 - **Dual-mode**: Sourceable or executable
 
@@ -52,11 +55,11 @@ key=$(get_pubkey) && is_authorized_pubkey "$key"
 ## Dependencies
 
 - Bash 5.2+
-- `grep` (for authorized_keys matching)
+- `getent` (for user lookup in `get-pubkey`)
 - Standard SSH key files in `~/.ssh/`
 
 ## Notes
 
 - Both scripts use the BCS dual-mode pattern: `declare -fx` exports the function, and the `BASH_SOURCE` guard separates library mode from script mode.
-- Key matching uses the base64 blob only (ignores comments), which is the correct way to match SSH keys regardless of trailing comment differences.
+- Key matching compares the key type and base64 blob exactly (ignores comments and options prefixes), which is the correct way to match SSH keys regardless of trailing comment differences. Partial or empty blobs are rejected rather than matched as substrings.
 - The `is-authorized-pubkey` input format supports a `mac|pubkey` payload convention, stripping the MAC prefix before matching.

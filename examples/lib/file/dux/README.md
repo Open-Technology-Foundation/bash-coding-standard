@@ -50,7 +50,8 @@ dux [OPTIONS] [DIRECTORY]
 
 | Option | Description |
 |--------|-------------|
-| `-L` | Follow symlinks |
+| `-L` | Follow all symlinks (a symlinked starting directory is always followed) |
+| `-x, --one-file-system` | Stay on the target's filesystem (skip other mounts, such as `/proc`) |
 | `-q, --quiet` | Suppress permission errors |
 | `-h, --help` | Show help |
 | `-V, --version` | Show version |
@@ -66,7 +67,7 @@ dux /              # Check entire filesystem (may need sudo)
 **Find the largest directories:**
 ```bash
 dux /var | tail -5         # Show 5 largest in /var
-sudo dux / | tail -10      # Show 10 largest on system
+sudo dux -x / | tail -10   # Show 10 largest on the root filesystem
 ```
 
 **Check a project for bloat:**
@@ -92,12 +93,13 @@ dux -L /opt/myapp              # Include symlinked directories
 ```
 
 - Sizes use IEC units: B, KiB, MiB, GiB, TiB
+- Sizes are apparent sizes (bytes of content, as `du -b`), not disk blocks
 - Output is tab-separated (easy to parse with `cut`, `awk`)
 - Sorted smallest to largest (largest at bottom for visibility)
 
 ## Handling Permissions
 
-Permission errors appear on stderr but don't stop execution:
+Permission errors from `du` appear on stderr but don't stop execution:
 
 ```bash
 dux /var                   # Shows errors inline
@@ -112,7 +114,7 @@ sudo dux /var              # Full access to all directories
 | 0 | Success |
 | 2 | Usage error (too many arguments) |
 | 3 | Directory not found |
-| 5 | I/O error (mktemp, du failure) |
+| 5 | I/O error (du failure) |
 | 22 | Invalid option |
 
 Aligned with [BCS §BCS0602](https://github.com/Open-Technology-Foundation/bash-coding-standard) canonical exit codes since v1.4.2. Scripts that previously checked `[[ $? -eq 1 ]]` for "bad path" must update to `-eq 3`.
@@ -120,7 +122,8 @@ Aligned with [BCS §BCS0602](https://github.com/Open-Technology-Foundation/bash-
 ## Requirements
 
 - Bash 5.2+
-- GNU coreutils (du, sort, numfmt)
+- GNU coreutils (`du` with `-sb`, `sort`, `numfmt`, `nproc`)
+- GNU findutils (`find`, `xargs`)
 
 ## Why dux?
 
@@ -130,7 +133,7 @@ Aligned with [BCS §BCS0602](https://github.com/Open-Technology-Foundation/bash-
 | Human-readable | Yes | Yes | Yes | Yes |
 | One command | Yes | No* | Yes | Yes |
 | Interactive | No | No | Yes | No |
-| Dependencies | coreutils | coreutils | ncurses | Rust |
+| Dependencies | coreutils, findutils | coreutils | ncurses | Rust |
 
 *`du` requires piping through `sort -h` for sorted human-readable output
 

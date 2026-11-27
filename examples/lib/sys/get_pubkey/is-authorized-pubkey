@@ -1,23 +1,54 @@
 #!/bin/bash
 # is_authorized_pubkey - is public key in authorized_keys
 
-if ((EUID == 0)); then
-  declare -x AUTHORIZED_KEYS_FILE=${AUTHORIZED_KEYS_FILE:-/root/.ssh/authorized_keys}
-else
-  declare -x AUTHORIZED_KEYS_FILE=${AUTHORIZED_KEYS_FILE:-~/.ssh/authorized_keys}
-fi
-
 is_authorized_pubkey() {
-  [[ -n "${1:-}" ]] || { >&2 echo "${FUNCNAME[0]}: error: No PUBKEY specified"; return 1; }
+  local -- payload=${1:-} keytype keyblob line
+  local -- akfile=${AUTHORIZED_KEYS_FILE:-}
+  local -a fields
+  local -i i
 
-  local -- r_pubkey=$1 r_keyblob
-  r_pubkey=${r_pubkey#*|}
-  r_keyblob=${r_pubkey#* }
-  r_keyblob=${r_keyblob%% *}
-  [[ -r $AUTHORIZED_KEYS_FILE ]] || { >&2 echo "${FUNCNAME[0]}: error: cannot read ${AUTHORIZED_KEYS_FILE@Q}"; return 1; }
-  grep -Fq "$r_keyblob" "$AUTHORIZED_KEYS_FILE" \
-      || { >&2 echo "${FUNCNAME[0]}: error: pubkey not in authorized_keys"; return 1; }
-  return 0
+  # Default resolved per call rather than at source time: sourcing has no side
+  # effects, and the exported function works in a child bash that never sourced us
+  if [[ -z $akfile ]]; then
+    if ((EUID == 0)); then
+      akfile=/root/.ssh/authorized_keys
+    else
+      akfile=~/.ssh/authorized_keys
+    fi
+  fi
+
+  # Strip a 'mac|' prefix only when it precedes the key, not a '|' in a comment
+  if [[ $payload =~ ^[^[:space:]|]+\| ]]; then
+    payload=${payload#*|}
+  fi
+  read -r keytype keyblob _ <<<"$payload"
+
+  # Whitelist both parts: an empty or partial blob would match unrelated keys
+  case $keytype in
+    ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521) ;;
+    sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-nistp256@openssh.com) ;;
+    *)  >&2 echo "${FUNCNAME[0]}: error: invalid PUBKEY: unknown key type ${keytype@Q}"
+        return 22 ;;
+  esac
+  [[ $keyblob =~ ^AAAA[A-Za-z0-9+/]{64,}={0,2}$ ]] || {
+    >&2 echo "${FUNCNAME[0]}: error: invalid PUBKEY: malformed key data"
+    return 22
+  }
+
+  [[ -r $akfile ]] || { >&2 echo "${FUNCNAME[0]}: error: cannot read ${akfile@Q}"; return 1; }
+
+  # Exact match on an adjacent 'type blob' pair of words, so an options prefix
+  # (which may hold quoted spaces) and the comment are both ignored
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
+    read -ra fields <<<"$line"
+    for ((i=1; i < ${#fields[@]}; i+=1)); do
+      [[ ${fields[i-1]} == "$keytype" && ${fields[i]} == "$keyblob" ]] && return 0
+    done
+  done < "$akfile"
+
+  >&2 echo "${FUNCNAME[0]}: error: pubkey not in authorized_keys"
+  return 1
 }
 declare -fx is_authorized_pubkey
 
@@ -26,8 +57,9 @@ declare -fx is_authorized_pubkey
 # --- Script mode only below ---
 set -euo pipefail
 shopt -s inherit_errexit
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
-declare -r SCRIPT_NAME=is-authorized-pubkey VERSION='1.0.0'
+declare -r SCRIPT_NAME=is-authorized-pubkey VERSION='1.1.0'
 
 show_help() {
   cat <<HELP
@@ -36,7 +68,8 @@ $SCRIPT_NAME $VERSION - check if a public key is in authorized_keys
 Usage: $SCRIPT_NAME [-h] [-V] PUBKEY
 
 Check whether PUBKEY exists in the authorized_keys file.
-Matches on the key blob (type + base64), ignoring comments.
+Matches the key type and base64 key data exactly, ignoring comments,
+options prefixes and commented-out lines.
 Input may include a mac|pubkey prefix, which is stripped before matching.
 
 Can also be sourced as a library:
@@ -50,8 +83,9 @@ Environment:
   AUTHORIZED_KEYS_FILE  Path to authorized_keys (default: ~/.ssh/authorized_keys)
 
 Exit codes:
-  0  Key found in authorized_keys
-  1  Key not found, or authorized_keys unreadable
+  0   Key found in authorized_keys
+  1   Key not found, or authorized_keys unreadable
+  22  Invalid option, missing or malformed PUBKEY
 
 Examples:
   $SCRIPT_NAME "\$(get-pubkey)"
@@ -59,19 +93,20 @@ Examples:
 HELP
 }
 
-while (($#)); do
-  case $1 in
-    -h|--help)    show_help; exit 0 ;;
-    -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
-    -*)           >&2 echo "$SCRIPT_NAME: error: unknown option: ${1@Q}"
-                  >&2 show_help; exit 1 ;;
-  esac
-  break
-done
-(($#)) || {
+declare -a args=()
+while (($#)); do case $1 in
+  -h|--help)    show_help; exit 0 ;;
+  -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
+  --)           shift; args+=("$@"); break ;;
+  -*)           >&2 echo "$SCRIPT_NAME: error: unknown option ${1@Q}"
+                >&2 show_help; exit 22 ;;
+  *)            args+=("$1") ;;
+esac; shift; done
+
+((${#args[@]} == 1)) || {
   >&2 echo "Usage: $SCRIPT_NAME [-h] [-V] PUBKEY"
-  exit 1
+  exit 22
 }
 
-is_authorized_pubkey "$@"
+is_authorized_pubkey "${args[0]}"
 #fin

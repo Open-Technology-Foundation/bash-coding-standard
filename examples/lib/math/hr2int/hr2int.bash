@@ -14,7 +14,6 @@
 #         : hr2int 34M    # Returns: 34000000 (34 × 1000²)
 hr2int() {
   local -- num h fmt=si
-  local -- LC_ALL=C  # Set once, outside the loop
   while (($#)); do
     num=${1:-0}
 
@@ -24,18 +23,16 @@ hr2int() {
       num=${num%[Bb]}
     fi
 
+    # Lowercase unit = IEC; uppercase, digit or none = SI. A character class,
+    # not a '>' string comparison, which follows locale collation ('K' > 'a' in en_US)
     h=${num: -1}
-    if [[ ${h:-} =~ ^[-+]?[0-9.]+$ ]]; then
-      fmt=si
+    if [[ $h == [[:lower:]] ]]; then
+      fmt=iec
     else
-      #bcscheck disable=BCS1202  # ASCII comparison: lowercase > 'a', uppercase < 'a'
-      if [[ $h > 'a' ]]; then
-        fmt=iec
-      else
-        fmt=si
-      fi
+      fmt=si
     fi
-    numfmt --from="$fmt" -- "${num^^}" || { >&2 echo "${FUNCNAME[0]}: Invalid input ${1@Q}"; return 10; }  # ERR_TYPE
+    # Prefix assignment exports LC_ALL to numfmt; a 'local' would not unless already exported
+    LC_ALL=C numfmt --from="$fmt" -- "${num^^}" || { >&2 echo "${FUNCNAME[0]}: Invalid input ${1@Q}"; return 10; }  # ERR_TYPE
     shift
   done
   return 0
@@ -58,13 +55,14 @@ int2hr() {
   local -i num
   local -- fmt hr
   while (($#)); do
-    # Validate input is an integer
-    if ! [[ ${1:-0} =~ ^-?[0-9]+$ ]]; then
+    # Validate input is an integer; captures drop leading zeros so that
+    # local -i does not read '010' as octal 8 or reject '08'
+    if ! [[ ${1:-0} =~ ^(-?)0*([0-9]+)$ ]]; then
       >&2 echo "${FUNCNAME[0]}: Invalid integer ${1@Q}"
       return 10  # ERR_TYPE
     fi
 
-    num=${1:-0}
+    num=${BASH_REMATCH[1]}${BASH_REMATCH[2]}
     fmt=${2:-si}
     fmt=${fmt,,}
 
@@ -75,7 +73,7 @@ int2hr() {
     fi
 
     # Use -- to handle negative numbers properly
-    hr=$(numfmt --to="$fmt" -- "$num") || { >&2 echo "${FUNCNAME[0]}: Conversion failed for ${num@Q}"; return 9; }  # ERR_RANGE
+    hr=$(LC_ALL=C numfmt --to="$fmt" -- "$num") || { >&2 echo "${FUNCNAME[0]}: Conversion failed for ${num@Q}"; return 9; }  # ERR_RANGE
     [[ $fmt == iec ]] && hr=${hr,,}
     echo "$hr"
     shift
@@ -95,16 +93,21 @@ int2hr() {
 # --- script mode ---
 set -euo pipefail
 shopt -s inherit_errexit
+# Set after the fence only: a sourced library must not replace the caller's PATH
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
-declare -r VERSION=1.0.0
+### VERSION managed by version
+declare -r VERSION=1.1.0
+###
 declare -r SCRIPT_NAME=${0##*/}
 
-if [[ $SCRIPT_NAME == hr2int ]]; then
-  show_help() {
-    cat <<HELP
+case $SCRIPT_NAME in
+  hr2int)
+    show_help() {
+      cat <<HELP
 $SCRIPT_NAME $VERSION - convert human-readable numbers to integers
 
-Usage: $SCRIPT_NAME NUMBER[SUFFIX] [NUMBER[SUFFIX]]...
+Usage: $SCRIPT_NAME [OPTIONS] NUMBER[SUFFIX] [NUMBER[SUFFIX]]...
 
 Converts each NUMBER to a plain integer. The SUFFIX, if present,
 determines the conversion base:
@@ -118,6 +121,7 @@ A trailing 'B' or 'b' is auto-stripped (e.g. 'MB' is treated as 'M').
 Options:
   -V, --version           Show version
   -h, --help              Show this help
+  --                      End of options
 
 Examples:
   $SCRIPT_NAME 1k         # 1024     (IEC binary)
@@ -125,24 +129,16 @@ Examples:
   $SCRIPT_NAME 34m        # 35651584 (34 × 1024²)
   $SCRIPT_NAME 34M        # 34000000 (34 × 1000²)
   $SCRIPT_NAME 2MB 3GB    # 2000000 then 3000000000
+  $SCRIPT_NAME -5k        # -5120
 HELP
-  }
-
-  case ${1:---help} in
-    -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
-    -h|--help)    show_help; exit 0 ;;
-    --)           shift ;;
-    --*|-[a-zA-Z]*) >&2 echo "$SCRIPT_NAME: Invalid option ${1@Q}"; exit 22 ;;
-  esac
-
-  hr2int "$@"
-
-elif [[ $SCRIPT_NAME == int2hr ]]; then
-  show_help() {
-    cat <<HELP
+    }
+    ;;
+  int2hr)
+    show_help() {
+      cat <<HELP
 $SCRIPT_NAME $VERSION - convert integers to human-readable numbers
 
-Usage: $SCRIPT_NAME NUMBER [FORMAT] [NUMBER [FORMAT]]...
+Usage: $SCRIPT_NAME [OPTIONS] NUMBER [FORMAT] [NUMBER [FORMAT]]...
 
 Converts each NUMBER to a human-readable form. FORMAT is optional
 and controls the base and suffix case:
@@ -157,6 +153,7 @@ Arguments:
 Options:
   -V, --version           Show version
   -h, --help              Show this help
+  --                      End of options
 
 Examples:
   $SCRIPT_NAME 1000              # 1.0K  (default SI)
@@ -164,20 +161,27 @@ Examples:
   $SCRIPT_NAME 35651584 iec      # 34m
   $SCRIPT_NAME 1000 si 1024 iec  # 1.0K then 1.0k
 HELP
-  }
+    }
+    ;;
+  *)
+    >&2 echo "Invalid basename ${SCRIPT_NAME@Q}"
+    exit 21  # ERR_STATE
+    ;;
+esac
 
-  case ${1:---help} in
-    -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
-    -h|--help)    show_help; exit 0 ;;
-    --)           shift ;;
-    --*|-[a-zA-Z]*) >&2 echo "$SCRIPT_NAME: Invalid option ${1@Q}"; exit 22 ;;
-  esac
+(($#)) || { show_help; exit 0; }
 
-  int2hr "$@"
+declare -a args=()
+while (($#)); do case $1 in
+  -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
+  -h|--help)    show_help; exit 0 ;;
+  --)           shift; args+=("$@"); break ;;
+  -[0-9.]*)     args+=("$1") ;;  # negative number, not an option
+  -*)           >&2 echo "$SCRIPT_NAME: Invalid option ${1@Q}"; exit 22 ;;  # ERR_INVAL
+  *)            args+=("$1") ;;
+esac; shift; done
 
-else
-  >&2 echo "Invalid basename ${SCRIPT_NAME@Q}"
-  exit 21  # ERR_STATE
-fi 
+# SCRIPT_NAME is hr2int or int2hr here: the case above exits on anything else
+"$SCRIPT_NAME" "${args[@]}"
 
 #fin

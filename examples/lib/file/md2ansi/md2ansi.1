@@ -1,4 +1,4 @@
-.TH MD2ANSI 1 "2026-02-26" "md2ansi 1.0.1" "User Commands"
+.TH MD2ANSI 1 "2026-11-27" "md2ansi 1.0.2" "User Commands"
 .SH NAME
 md2ansi \- convert Markdown to ANSI-colored terminal output
 .SH SYNOPSIS
@@ -34,14 +34,18 @@ Enable debug mode with detailed trace output sent to stderr. Useful for
 troubleshooting rendering issues or understanding the parsing process.
 .TP
 .BR \-w ", " \-\-width " \fIWIDTH\fR"
-Force a specific terminal width instead of auto-detecting. Valid range is
-20-500 columns. Useful for generating output for specific display widths or
-when terminal detection fails.
+Force a specific terminal width instead of auto-detecting; overrides
+COLUMNS. Valid range is 20-500 columns, read as decimal (040 is 40). Useful
+for generating output for specific display widths or when terminal
+detection fails.
 .TP
 .BR \-t ", " \-\-plain
-Enable plain text mode, disabling all ANSI formatting and colors. Output will
-be rendered as plain text suitable for non-terminal contexts or when colors
-are not desired.
+Disable all formatting features at once, as if every \-\-no\-* option below
+were given. Colors and inline styles (header colors, bold, italic) still apply
+when the terminal supports them; run with
+.B TERM=dumb
+for output with no ANSI codes at all (see
+.BR ENVIRONMENT ).
 .SS "Feature Toggle Options"
 All markdown features are enabled by default. Use these options to disable
 specific features:
@@ -267,14 +271,17 @@ Disable tables and syntax highlighting:
 md2ansi --no-tables --no-syntax-highlight README.md
 .fi
 .RE
-.SS "Plain Text Mode"
-Generate plain text output without colors:
+.SS "Output Without ANSI Codes"
+Write plain text with no colors or styles, for example to a file:
 .PP
 .RS
 .nf
-md2ansi --plain README.md > output.txt
+TERM=dumb md2ansi README.md > output.txt
 .fi
 .RE
+.PP
+.B \-\-plain
+alone is not enough: it turns off the formatting features but keeps colors.
 .SS "Browser Preview with mdview"
 Preview a Markdown file in the browser:
 .PP
@@ -299,9 +306,6 @@ includes several security features to handle untrusted input safely:
 .SS "File Size Limits"
 Maximum file size is limited to 10MB (configurable via MAX_FILE_SIZE in the
 script). This prevents memory exhaustion from extremely large files.
-.SS "ReDoS Protection"
-Regular expression operations are wrapped with timeout command (1 second
-limit) to prevent Regular Expression Denial of Service attacks.
 .SS "Input Sanitization"
 All input is sanitized to remove ANSI escape sequences, preventing terminal
 injection attacks.
@@ -370,11 +374,17 @@ syntax highlighting style). Installed to <prefix>/share/mdview/themes/.
 .SH ENVIRONMENT
 .TP
 .B TERM
-Terminal type, used for capability detection via tput
+Terminal type, used for capability detection via tput. Colors are used when
+tput reports 256 or more colors, even when output is piped or redirected (so
+pagers such as less \-R keep them). Set TERM=dumb to turn colors and styles
+off entirely; \-\-plain does not.
 .TP
 .B COLUMNS
-Terminal width in columns. If not set, auto-detected via tput cols or stty
-size
+Output width when \-\-width is not given. An exported COLUMNS takes
+precedence over the terminal's own width: tput cols reads it first, and
+md2ansi reads it itself when TERM is unset or unknown. Without COLUMNS the
+width is the terminal's, or normally 80 when no terminal is found (see
+BUGS for piped input). Detected widths are clamped to 20\-500.
 .TP
 .B LESS
 Options passed to less when using the md wrapper. The wrapper sets -FXRS by
@@ -470,6 +480,10 @@ support
 Syntax highlighting is line-based and simpler than token-based highlighters
 .IP \(bu 2
 Performance is ~2-3x slower than Python implementation for large files
+.IP \(bu 2
+With input from a pipe (cat file | md2ansi) the terminal width is not
+detected and output falls back to 80 columns; export COLUMNS or use
+\-\-width
 .PP
 Report bugs at:
 .br

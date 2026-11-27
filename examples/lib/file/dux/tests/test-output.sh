@@ -26,9 +26,9 @@ mkdir -p "$TEST_DIR"/medium-subdir
 mkdir -p "$TEST_DIR"/large-subdir
 
 # Create files of different sizes
-dd if=/dev/zero of="$TEST_DIR"/small-subdir/small.bin bs=1024 count=10 2>/dev/null   # 10KB
-dd if=/dev/zero of="$TEST_DIR"/medium-subdir/medium.bin bs=1024 count=100 2>/dev/null # 100KB
-dd if=/dev/zero of="$TEST_DIR"/large-subdir/large.bin bs=1024 count=1000 2>/dev/null  # 1MB
+dd if=/dev/zero of="$TEST_DIR"/small-subdir/small.bin bs=1024 count=10 2>/dev/null   # 10 KiB
+dd if=/dev/zero of="$TEST_DIR"/medium-subdir/medium.bin bs=1024 count=100 2>/dev/null # 100 KiB
+dd if=/dev/zero of="$TEST_DIR"/large-subdir/large.bin bs=1024 count=1000 2>/dev/null  # 1000 KiB
 
 test_section 'Output Format'
 
@@ -48,13 +48,11 @@ else
   fail 'Columns should be separated by tab'
 fi
 
-# Test: Sizes use IEC units (B, KiB, MiB, GiB)
-# numfmt uses MB not MiB by default, check for either
-if echo "$output" | grep -qE '[0-9.]+[KMGTP]?i?B'; then
-  pass 'Sizes use IEC units (B/KiB/MiB/GiB)'
-else
-  fail 'Sizes should use IEC units'
-fi
+# Test: Sizes use IEC binary prefixes spelled out (KiB, not KB)
+declare -- medium_line
+medium_line=$(grep -- 'medium-subdir' <<<"$output")
+assert_regex_match "$medium_line" '^100\.[0-9]KiB +'$'\t' 'Sizes use KiB (binary prefix), not KB'
+assert_not_contains "$output" 'KB ' 'No SI-looking KB label in output'
 
 # Test: Output sorted smallest to largest
 # The empty dir should come before small, small before medium, medium before large
@@ -110,13 +108,10 @@ assert_greater_than "$line_count" 3 'At least 4 lines of output'
 # Test: Relative paths preserved
 declare -- rel_output abs_output
 rel_output=$(cd "$TEST_DIR" && "$DUX" . 2>&1)
-if echo "$rel_output" | grep -q '^\./'; then
-  pass 'Relative paths preserved in output'
-elif echo "$rel_output" | grep -q '^\.$'; then
-  pass 'Relative path . preserved'
-else
-  warn 'Relative path format may vary'
-fi
+# Each line is '<size><pad>\t<path>', so the path follows the tab
+assert_contains "$rel_output" $'\t./small-subdir' 'Relative paths preserved in output'
+# The target holds everything, so it sorts last
+assert_equals . "$(tail -n1 <<<"$rel_output" | cut -f2)" 'Relative path . preserved'
 
 # Test: Absolute paths preserved
 abs_output=$("$DUX" "$TEST_DIR" 2>&1)

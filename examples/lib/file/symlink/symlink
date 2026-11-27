@@ -8,15 +8,18 @@ declare -rx PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
 # Enforce root privileges at the very beginning
 ((EUID==0)) || {
   sudo -ln &>/dev/null || {
-    >&2 echo "$(basename "$0"): error: Requires root," \
+    >&2 echo "$(basename -- "$0"): error: Requires root," \
       "or non-interactive sudo privileges."
     exit 1
   }
-  sudo -E "$0" "$@"
+  # Forward only the safe debug var across the privilege boundary; do NOT use
+  # `sudo -E` — that would carry SYMLINK_FORCE_CRITICAL (critical-file override)
+  # into the root re-exec without re-validation. Real root may still set it.
+  sudo SYMLINK_DEBUG="${SYMLINK_DEBUG:-}" "$0" "$@"
   exit "$?"
 }
 
-declare -r VERSION=1.4.1
+declare -r VERSION=1.5.1
 declare -- SCRIPT_PATH
 SCRIPT_PATH=$(realpath -- "$0")
 readonly SCRIPT_PATH
@@ -26,23 +29,31 @@ declare -- ORIG_DIR
 ORIG_DIR=$(pwd 2>/dev/null) || ORIG_DIR=''
 readonly ORIG_DIR
 declare -r DEFAULT_TARGET_DIR=${DEFAULT_TARGET_DIR:-/usr/local/bin}
+# Hard-protected names: replacing one requires interactive confirmation or
+# SYMLINK_FORCE_CRITICAL. This is a best-effort UX guard, NOT a security
+# boundary (the real boundary is "don't scan untrusted trees as root", enforced
+# by the .symlink source/link-name containment checks). Any OTHER name that
+# would shadow a real PATH command is handled dynamically — see shadowed_command.
 declare -ra CRITICAL_FILES=(
-  awk bash cat chgrp chmod chown clang cp dash date df du echo
-  file find gcc git grep groupadd groupdel head hostname ifconfig
-  ip kill less login ls make mkdir mount mv netstat passwd ping
-  ps reboot rm rmdir sed sh shutdown ss sudo tail top touch
-  umount useradd userdel vi vim zsh
+  apt awk bash cat chgrp chmod chown clang cp crontab dash date dd df du
+  dpkg echo env file find gcc git grep groupadd groupdel head hostname
+  ifconfig ip kill less ln login ls make mkdir mount mv netstat passwd
+  ping ps reboot rm rmdir scp sed sh shutdown ss ssh su sudo systemctl
+  tail top touch umount useradd userdel vi vim visudo zsh
 )
 
 # Initialize key variables early
 declare -i SCANSYMLINK=0
 declare -i DELETE_DEAD_SYMLINKS=0
 declare -i LISTIT=0
+declare -i FORCE=0      # -f: clobber pre-existing non-symlink files non-interactively
+declare -i BACKUP=0     # --backup: rename a clobbered file to name.bak~ first
 declare -i FIND_MAX_DEPTH=5
 declare -a CREATED_LINKS=()
 declare -a REPLACED_LINKS=()
 declare -a SKIPPED_LINKS=()
 declare -a ERROR_LINKS=()
+declare -- TMP_LINK=''  # in-flight .symlink-tmp-* link; cleanup() removes it if interrupted
 
 # --------------------------------------------------------------------------------
 # Message functions and color support
@@ -76,7 +87,9 @@ _msg() {
 
 # Verbose output (stderr)
 success() { ((VERBOSE)) || return 0; >&2 _msg "$@"; }
-warn() { ((VERBOSE)) || return 0; >&2 _msg "$@"; }
+# warn() is unconditional: safety-relevant warnings (critical-file, target-dir
+# scan, failed cleanup) must surface even in the default non-verbose -SPd run.
+warn() { >&2 _msg "$@"; }
 info() { ((VERBOSE)) || return 0; >&2 _msg "$@"; }
 # Debug output (stderr, requires DEBUG=1)
 debug() { ((DEBUG)) || return 0; >&2 _msg "$@"; }
@@ -86,10 +99,15 @@ error() { >&2 _msg "$@"; }
 die() { (($# < 2)) || error "${@:2}"; exit "${1:-0}"; }
 # yes/no prompt
 yn() {
-  ((PROMPT)) || return 0
-  local -- REPLY
-  read -r -n 1 -p "$SCRIPT_NAME: ${YELLOW}▲${NC} ${1:-'Continue?'} y/n " </dev/tty
-  echo
+  # REPLY pre-set: if /dev/tty cannot be opened, read never assigns it and
+  # set -u would abort on the test below instead of treating it as "no".
+  local -- REPLY=''
+  >&2 echo -n "$SCRIPT_NAME: $YELLOW▲$NC ${1:-Continue?} y/n "
+  # </dev/tty is load-bearing: during -S, create_symlink runs inside
+  # `while read ... done < .symlink`, so stdin is the .symlink file and a bare
+  # read would take its answer from the next entry (a leading 'y' auto-confirms).
+  read -r -n 1 </dev/tty
+  >&2 echo
   [[ ${REPLY,,} == y ]]
 }
 
@@ -101,7 +119,10 @@ noarg() { (($# > 1)) || die 22 "Option ${1@Q} requires an argument"; }
 
 # cleanup - EXIT trap handler for finalization and debug logging
 cleanup() {
-  cd "$ORIG_DIR" 2>/dev/null || true
+  cd -- "$ORIG_DIR" 2>/dev/null || true
+  # Interrupted between ln and mv in create_symlink: drop the hidden temp link,
+  # which -d would never find (dotfile, and not broken).
+  [[ -z $TMP_LINK ]] || rm -f -- "$TMP_LINK" 2>/dev/null ||:
   if ((DEBUG)); then
     { echo "TRACE: Created links: ${#CREATED_LINKS[@]}"
       echo "TRACE: Replaced links: ${#REPLACED_LINKS[@]}"
@@ -125,7 +146,10 @@ fi
 # Setup debug trace if in debug mode
 declare -- TRACEFILE=/dev/null
 if ((DEBUG)); then
-  TRACEFILE=/tmp/symlink-trace-"$(whoami)"-"$$".log
+  # mktemp creates the file with O_EXCL and mode 0600 — defeats a predictable
+  # /tmp symlink-attack vector when running as root. TMPDIR lets tests isolate
+  # traces into a private dir. Fall back to /dev/null on failure.
+  TRACEFILE=$(mktemp -- "${TMPDIR:-/tmp}/symlink-trace-$(whoami)-XXXXXX.log") || TRACEFILE=/dev/null
   { echo "TRACE: Script started at $(date -Is)"
     echo "TRACE: Arguments: $*"
     echo "TRACE: Working dir: $(pwd)"
@@ -164,21 +188,25 @@ OPTIONS:
   -t, --target-dir DIR   Target directory (default: $DEFAULT_TARGET_DIR)
   -d, --delete-broken-symlinks  Remove broken symlinks in target dir
   -P, --no-prompt        Skip confirmation prompts
+  -f, --force            Replace existing non-symlink files (non-interactive)
+      --backup           Back up a replaced file to NAME.bak~ before clobbering
   -n, --dry-run          Preview without making changes
   -v, --verbose          Detailed output
   -q, --quiet            Suppress verbose output (opposite of -v)
-  -D, --debug            Debug logging to /tmp/symlink-trace-*
+  -D, --debug            Debug logging to \$TMPDIR/symlink-trace-*
   -V, --version          Show version
   -h, --help             This help
   Short options may be combined: -SPd is equivalent to -S -P -d
 
 SAFETY:
-  • ${#CRITICAL_FILES[@]} system binaries protected (bash, sudo, etc.)
-  • Scanning in $DEFAULT_TARGET_DIR restricted
+  • ${#CRITICAL_FILES[@]} system binaries hard-protected (bash, sudo, ssh, etc.)
+  • Any link that would shadow another PATH command is flagged
+  • Pre-existing non-symlink files are skipped unless --force
+  • Scanning in $DEFAULT_TARGET_DIR restricted; .symlink paths kept in-tree
   • Symlink creation uses 2s path resolution timeout
 
 EXIT CODES:
-  0=success  1=error  2=permission  3=not found  22=bad option  50=no .symlink files
+  0=success  1=error  3=not found  13=permission  22=bad option  50=no .symlink files
 
 ENVIRONMENT:
   SYMLINK_DEBUG=1          Enable debug mode
@@ -199,7 +227,8 @@ HELP
 trim() {
   local -- v="$*"
   v="${v#"${v%%[![:blank:]]*}"}"
-  echo -n "${v%"${v##*[![:blank:]]}"}"
+  # printf (not echo -n) so a value of exactly -n/-e/-E is not eaten as a flag.
+  printf '%s' "${v%"${v##*[![:blank:]]}"}"
 }
 
 # --------------------------------------------------------------------------------
@@ -207,9 +236,29 @@ trim() {
 # --------------------------------------------------------------------------------
 # is_critical_file FILENAME - Returns 0 if in CRITICAL_FILES array, 1 otherwise
 is_critical_file() {
-  local -- filename="$1" critical
+  # Compare on basename only so a path-qualified name cannot dodge the check.
+  local -- filename="${1##*/}" critical
   for critical in "${CRITICAL_FILES[@]}"; do
     [[ "$filename" == "$critical" ]] && return 0 ||:
+  done
+  return 1
+}
+
+# shadowed_command NAME TARGET_DIR
+# If NAME resolves to an executable on PATH OUTSIDE target_dir, echo that path
+# (the command the new link would shadow) and return 0; otherwise return 1.
+# Walks PATH directly (PATH is readonly, so it cannot be reassigned) and skips
+# target_dir so an existing link there is not mistaken for the shadowed command.
+shadowed_command() {
+  local -- name="${1##*/}" target_dir="$2" dir
+  local -a parts=()
+  IFS=: read -ra parts <<< "$PATH"
+  for dir in "${parts[@]}"; do
+    [[ -z "$dir" || "$dir" == "$target_dir" ]] && continue
+    if [[ -f "$dir/$name" && -x "$dir/$name" ]]; then
+      printf '%s' "$dir/$name"
+      return 0
+    fi
   done
   return 1
 }
@@ -218,7 +267,7 @@ is_critical_file() {
 # Core symlink operations
 # --------------------------------------------------------------------------------
 # create_symlink SOURCE TARGET_DIR [CUSTOM_NAME]
-# Creates symlink in TARGET_DIR pointing to SOURCE. Returns: 0=ok, 1=error, 2=perm, 3=notfound
+# Creates symlink in TARGET_DIR pointing to SOURCE. Returns: 0=ok, 1=error, 3=notfound, 13=perm
 # Updates global arrays: CREATED_LINKS, REPLACED_LINKS, SKIPPED_LINKS, ERROR_LINKS
 create_symlink() {
   local -- source_path=$1
@@ -226,9 +275,12 @@ create_symlink() {
   local -- custom_target_name=${3:-}
   local -- target_name target_path
   local -i exit_code=0
+  local -i was_replaced=0  # replacing an existing link/file must not also count as created
 
   # Get target filename - use custom name if provided, otherwise use basename
-  target_name="${custom_target_name:-$(basename "$source_path")}"
+  # ${var##*/} not basename: a source whose name starts with '-' would make
+  # basename treat it as an option, failing the command-sub and aborting set -e.
+  target_name="${custom_target_name:-${source_path##*/}}"
   target_path="${target_dir}/${target_name}"
   debug "create_symlink: $source_path → $target_path"
 
@@ -255,7 +307,7 @@ create_symlink() {
 
   # Get absolute path to source with timeout to prevent hanging
   local -- source_abs_path
-  source_abs_path=$(timeout 2 realpath -- "$source_path" 2>/dev/null)
+  source_abs_path=$(timeout 2 realpath -- "$source_path" 2>/dev/null) || source_abs_path=''
 
   if [[ -z "$source_abs_path" ]]; then
     error "Failed to resolve source path: '$source_path'"
@@ -281,7 +333,7 @@ create_symlink() {
       info "[DRY RUN] Would fail: No write permission on target directory ${target_dir@Q}"
       return 0
     fi
-    return 2
+    return 13
   fi
 
   # Check for critical system files
@@ -313,6 +365,21 @@ create_symlink() {
       SKIPPED_LINKS+=("$source_path → $target_path (critical file)")
       return 0
     fi
+  else
+    # PATH-shadow advisory (only when NOT a hard-protected critical file):
+    # if this link would override a real command elsewhere on PATH, surface it.
+    # Non-blocking by default — overriding via /usr/local/bin is normal usage —
+    # but prompt in interactive mode so the user can back out.
+    local -- shadowed
+    shadowed=$(shadowed_command "$target_name" "$target_dir") || shadowed=''
+    if [[ -n "$shadowed" ]]; then
+      warn "${target_name@Q} will shadow ${shadowed@Q} on PATH"
+      if ((PROMPT && DRY_RUN == 0)) && ! yn "Create ${target_name@Q}, shadowing ${shadowed@Q}?"; then
+        info "Skipping ${target_name@Q}"
+        SKIPPED_LINKS+=("$source_path → $target_path (user skipped shadow)")
+        return 0
+      fi
+    fi
   fi
 
   # Dry run mode
@@ -320,7 +387,9 @@ create_symlink() {
     if [[ -L "$target_path" ]]; then
       # Check if it's already pointing to our target
       local -- current_target
-      current_target=$(realpath -- "$target_path" 2>/dev/null)
+      # errexit-safe: a broken/circular target makes realpath non-zero; without
+      # the guard, set -e + inherit_errexit would abort the whole run here.
+      current_target=$(realpath -- "$target_path" 2>/dev/null) || current_target=''
       if [[ "$current_target" == "$source_abs_path" ]]; then
         info "[DRY RUN] Would skip (already linked): '$source_abs_path' → '$target_path'"
         SKIPPED_LINKS+=("$source_path → $target_path (already exists)")
@@ -329,8 +398,13 @@ create_symlink() {
         REPLACED_LINKS+=("$source_path → $target_path (replaced symlink)")
       fi
     elif [[ -e "$target_path" ]]; then
-      info "[DRY RUN] Would replace file: '$source_abs_path' → '$target_path'"
-      REPLACED_LINKS+=("$source_path → $target_path (replaced file)")
+      if ((PROMPT || FORCE)); then
+        info "[DRY RUN] Would replace file: '$source_abs_path' → '$target_path'"
+        REPLACED_LINKS+=("$source_path → $target_path (replaced file)")
+      else
+        info "[DRY RUN] Would skip (existing non-symlink, use --force): '$target_path'"
+        SKIPPED_LINKS+=("$source_path → $target_path (existing non-symlink, use --force)")
+      fi
     else
       info "[DRY RUN] Would create symlink: '$source_abs_path' → '$target_path'"
       CREATED_LINKS+=("$source_path → $target_path")
@@ -341,12 +415,15 @@ create_symlink() {
   # Handle existing symlink
   if [[ -L "$target_path" ]]; then
     local -- current_target
-    current_target=$(realpath -- "$target_path" 2>/dev/null)
+    # errexit-safe: a broken/circular target makes realpath non-zero; without
+    # the guard, set -e + inherit_errexit would abort the whole run here.
+    current_target=$(realpath -- "$target_path" 2>/dev/null) || current_target=''
 
     # Already pointing to our target — nothing to do
     if [[ "$current_target" == "$source_abs_path" ]]; then
       info "Symlink already points to ${source_abs_path@Q}, skipping"
-      change_symlink_owner_perms "$source_abs_path" "$target_path"
+      # Best-effort metadata sync; any failure has already been warned about.
+      change_symlink_owner_perms "$source_abs_path" "$target_path" ||:
       SKIPPED_LINKS+=("$source_path → $target_path (already exists)")
       return 0
     fi
@@ -365,16 +442,19 @@ create_symlink() {
       info "Removing existing symlink ${target_path@Q}"
     fi
 
-    if ! rm "$target_path"; then
-      error "Failed to remove existing symlink ${target_path@Q}"
-      ERROR_LINKS+=("$source_path → $target_path (remove failed)")
-      return 1
-    fi
+    # The existing symlink is replaced atomically by the final mv -fT below —
+    # no explicit rm here, so there is never a window where neither link exists.
     REPLACED_LINKS+=("$source_path → $target_path (replaced symlink)")
+    was_replaced=1
   fi
 
-  # Handle existing regular file
-  if [[ -e "$target_path" ]]; then
+  # Handle existing regular file (NOT a symlink — likely admin-installed, not
+  # created by this tool). Destroying it is real data loss, so the default in
+  # non-interactive mode is to SKIP unless -f/--force is given.
+  # NOTE: ! -L — an existing *symlink* was already handled above; since we no
+  # longer rm it there (atomic replace below), exclude it here so a live symlink
+  # is not misclassified as a regular file and wrongly skipped.
+  if [[ -e "$target_path" && ! -L "$target_path" ]]; then
     info "File exists ${target_path@Q}"
     if ((PROMPT)); then
       if ! yn "Remove existing file ${target_name@Q}?"; then
@@ -382,53 +462,99 @@ create_symlink() {
         SKIPPED_LINKS+=("$source_path → $target_path (user skipped)")
         return 0
       fi
+    elif ((FORCE)); then
+      info "Removing existing file ${target_path@Q} (--force)"
     else
-      info "Removing existing file ${target_path@Q}"
+      warn "Skipping ${target_name@Q}: target is an existing non-symlink file" \
+        "(use --force to replace)"
+      SKIPPED_LINKS+=("$source_path → $target_path (existing non-symlink, use --force)")
+      return 0
     fi
 
-    if ! rm "$target_path"; then
-      error "Failed to remove existing file ${target_path@Q}"
-      ERROR_LINKS+=("$source_path → $target_path (remove failed)")
-      return 1
+    # Back up before clobbering when requested. Without --backup the existing
+    # file is replaced atomically by the final mv -fT below (it is never removed
+    # before the new link exists), so no explicit rm is needed here.
+    if ((BACKUP)); then
+      if mv -f -- "$target_path" "${target_path}.bak~"; then
+        info "Backed up existing file to ${target_path@Q}.bak~"
+      else
+        error "Failed to back up existing file ${target_path@Q}"
+        ERROR_LINKS+=("$source_path → $target_path (backup failed)")
+        return 1
+      fi
     fi
     REPLACED_LINKS+=("$source_path → $target_path (replaced file)")
+    was_replaced=1
   fi
 
-  # Create the symbolic link
+  # Create the symbolic link atomically: build it under a temp name in the SAME
+  # directory, then mv -fT it over the target. rename(2) is atomic and never
+  # destroys an existing target before the replacement exists, so a failed ln
+  # (ENOSPC, race, read-only dir) can no longer leave neither file nor link.
   info "Creating symlink: '$source_abs_path' → '$target_path'"
-  if ! ln -s "$source_abs_path" "$target_path"; then
-    error "Failed to create symlink ${target_path@Q}"
+  # The name lives in the global TMP_LINK so cleanup() can remove it if the
+  # script is interrupted between ln and mv.
+  TMP_LINK=$(mktemp -u -- "${target_dir}/.symlink-tmp-XXXXXX") || TMP_LINK=''
+  if [[ -z "$TMP_LINK" ]]; then
+    error "Failed to allocate temporary name in ${target_dir@Q}"
     ERROR_LINKS+=("$source_path → $target_path (link failed)")
     return 1
   fi
+  if ! ln -s -- "$source_abs_path" "$TMP_LINK"; then
+    error "Failed to create symlink ${target_path@Q}"
+    ERROR_LINKS+=("$source_path → $target_path (link failed)")
+    rm -f -- "$TMP_LINK" 2>/dev/null || :
+    TMP_LINK=''
+    return 1
+  fi
+  if ! mv -fT -- "$TMP_LINK" "$target_path"; then
+    error "Failed to install symlink ${target_path@Q}"
+    ERROR_LINKS+=("$source_path → $target_path (link failed)")
+    rm -f -- "$TMP_LINK" 2>/dev/null || :
+    TMP_LINK=''
+    return 1
+  fi
+  TMP_LINK=''
 
-  CREATED_LINKS+=("$source_path → $target_path")
+  ((was_replaced)) || CREATED_LINKS+=("$source_path → $target_path")
   success "Created symlink ${target_name@Q}"
 
-  change_symlink_owner_perms "$source_abs_path" "$target_path"
+  # Best-effort metadata sync; any failure has already been warned about.
+  change_symlink_owner_perms "$source_abs_path" "$target_path" ||:
 
   # Show details of the created symlink if verbose
-  ((VERBOSE)) && { ls -lsd -- "$target_path" >&2 || :; }
+  ((VERBOSE)) && >&2 ls -lsd -- "$target_path" ||:
 
   return 0
 }
 
 # change_symlink_owner_perms SOURCE_PATH SYMLINK_PATH
-# Copies owner, group, and mtime from source to symlink (not file mode bits)
+# Copies owner, group, and mtime from source to symlink (not file mode bits).
+# Returns 1, after a warning, if any step fails. Callers run with errexit
+# suspended (create_symlink is always called on the left of ||), so each step
+# is checked here rather than left to set -e.
 change_symlink_owner_perms() {
   local -- source_abs_path="$1" target_path="$2"
+  local -i rc=0
   # Get numeric owner/group — robust against missing /etc/passwd or
   # /etc/group entries on freshly-extracted archives (UNKNOWN would break
   # symbolic chown on hosts where a uid/gid has no name mapping yet).
   local -- uidgid
-  uidgid=$(stat -c '%u:%g' "$source_abs_path")
+  uidgid=$(stat -c '%u:%g' -- "$source_abs_path" 2>/dev/null) || uidgid=''
   # Copy mtime from source to symlink
   debug "touch -h -r $source_abs_path $target_path"
-  touch -h -r "$source_abs_path" "$target_path"
+  touch -h -r "$source_abs_path" -- "$target_path" \
+    || { warn "Failed to copy mtime to ${target_path@Q}"; rc=1; }
+  # An empty spec would make chown a silent no-op, so report it instead.
+  if [[ -z "$uidgid" ]]; then
+    warn "Cannot read owner of ${source_abs_path@Q}; ownership not copied to ${target_path@Q}"
+    return 1
+  fi
   # Change ownership of the symlink to match the source (numeric)
   debug "chown -h $uidgid $target_path"
-  chown -h "$uidgid" "$target_path"
-  return 0
+  chown -h -- "$uidgid" "$target_path" \
+    || { warn "Failed to set owner $uidgid on ${target_path@Q}"; rc=1; }
+  return "$rc"
 }
 
 
@@ -473,7 +599,7 @@ delete_broken_symlinks() {
     [[ -e "$link" ]] && continue || :
     # This is a broken symlink - delete it
     info "Deleting broken symlink ${link@Q}"
-    if rm "$link"; then
+    if rm -- "$link"; then
       count+=1
     else
       warn "Failed to delete broken symlink ${link@Q}"
@@ -484,6 +610,30 @@ delete_broken_symlinks() {
 
   debug 'delete_broken_symlinks completed successfully'
   return 0
+}
+
+# --------------------------------------------------------------------------------
+# .symlink file discovery
+# --------------------------------------------------------------------------------
+# find_symlink_files STARTPATH [MODE_NAME]
+# Prints newline-separated paths of .symlink files at or below STARTPATH
+# (depth ≤ FIND_MAX_DEPTH). MODE_NAME ("scanning"/"listing") only tunes the
+# warning text. Returns non-zero when the underlying find fails (e.g. an
+# unreadable subtree) so the caller can tell a real scan error from a genuinely
+# empty result — output is empty in BOTH cases, the exit code is not.
+find_symlink_files() {
+  local -- startpath="${1%/}" mode_name="${2:-scanning}"
+  # Scanning in/under the target dir is dangerous (it would re-link the links we
+  # create), so restrict to the single direct .symlink file and warn.
+  if [[ "$startpath" == "$DEFAULT_TARGET_DIR" \
+        || "$startpath" == "$DEFAULT_TARGET_DIR"/* ]]; then
+    warn "${mode_name^} in target directory ($DEFAULT_TARGET_DIR) is not recommended"
+    [[ -f "$startpath/.symlink" ]] && printf '%s\n' "$startpath/.symlink" ||:
+    return 0
+  fi
+  # pipefail (set at top) makes the pipeline inherit find's failure status, so a
+  # permission-denied/IO error on the tree propagates instead of looking empty.
+  find "$startpath" -maxdepth "$FIND_MAX_DEPTH" -type f -name '.symlink' | sort -u
 }
 
 # --------------------------------------------------------------------------------
@@ -576,6 +726,8 @@ main() {
     -S|--scan-symlink)  SCANSYMLINK=1 ;;
     -d|--delete-broken-symlinks)
                         DELETE_DEAD_SYMLINKS=1 ;;
+    -f|--force)         FORCE=1 ;;
+    --backup)           BACKUP=1 ;;
     # Basic options
     -h|--help)          show_help; return 0 ;;
     -v|--verbose)       VERBOSE=1 ;;
@@ -585,12 +737,16 @@ main() {
     -D|--debug)         DEBUG=1 ;;
 
     # Handle combined short options (e.g., -vPd -> -v -P -d)
-    -[tlPSdhvqVnD]?*)  set -- "${1:0:2}" "-${1:2}" "${@:2}"; continue ;;
+    -[tlPSdfhvqVnD]?*)  set -- "${1:0:2}" "-${1:2}" "${@:2}"; continue ;;
     # Error handling
     -*)                 die 22 "Invalid option ${1@Q}" ;;
     # Collect non-option arguments as target files/paths
     *)                  targets+=("$1") ;;
   esac; shift; done
+
+  # Dry-run is a preview: surface per-file detail by default so -n shows which
+  # links would be created/replaced/skipped (these route through info()).
+  ((DRY_RUN)) && VERBOSE=1 ||:
 
   [[ -z $target_dir ]] && target_dir="$DEFAULT_TARGET_DIR"
 
@@ -599,7 +755,7 @@ main() {
     # Check if target directory exists and is writable
     [[ -d "$target_dir" ]] || die 3 "Target directory does not exist ${target_dir@Q}"
 
-    [[ -w "$target_dir" ]] || die 2 "No write permission on target directory ${target_dir@Q}"
+    [[ -w "$target_dir" ]] || die 13 "No write permission on target directory ${target_dir@Q}"
   fi
 
   # Process .symlink files if -l or -S options were used
@@ -607,7 +763,7 @@ main() {
     # Allow only one startpath for listing or scanning operations
     local -- mode_name
     mode_name=$( ((LISTIT)) && echo "listing" || echo "scanning" )
-    ((${#targets[@]} > 1)) && die 1 \
+    ((${#targets[@]} < 2)) || die 1 \
       "Can only specify one startpath for ${mode_name}."
 
     local -- startpath="$ORIG_DIR" symlink
@@ -631,13 +787,13 @@ main() {
         realpath -- "$startpath" 2>/dev/null || echo ''
       )
 
-    [[ -n "$startpath" ]] || die 1 "Failed to resolve path (invalid or inaccessible)"
+    [[ -n "$startpath" ]] || die 13 "Failed to resolve path (invalid or inaccessible)"
 
     info "Resolved path ${startpath@Q}"
     [[ -d "$startpath" ]] || die 3 "Path is not a directory ${startpath@Q}"
 
     # Ensure the path exists and is accessible
-    [[ -x "$startpath" ]] || die 2 "Path exists but is not accessible ${startpath@Q}"
+    [[ -x "$startpath" ]] || die 13 "Path exists but is not accessible ${startpath@Q}"
 
     # Handle the -l (list) option - just show contents of .symlink files
     if ((LISTIT)); then
@@ -648,38 +804,29 @@ main() {
       local -- symlink
       debug "Finding .symlink files"
 
-      # First check if the startpath is actually /usr/local/bin or contains it
-      if [[ "$startpath" == "$DEFAULT_TARGET_DIR" \
-        || "$startpath" == "$DEFAULT_TARGET_DIR"/* ]]; then
-        # We're scanning in or below the target directory, which is dangerous
-        warn "Listing in target directory ($DEFAULT_TARGET_DIR) is not recommended"
-        # To be extra safe, we just find the direct .symlink file
-        if [[ -f "$startpath/.symlink" ]]; then
-          symlink_files=("$startpath/.symlink")
-        else
-          warn "No .symlink files found in ${startpath@Q}"
-          return 50
-        fi
-      else
-        # For standard directories, do a limited depth search
-          if ! mapfile -t symlink_files < <(
-              find "$startpath" -maxdepth "$FIND_MAX_DEPTH" \
-                  -type f -name '.symlink' 2>/dev/null \
-                | sort -u
-              ); then
-          die 1 "Error finding .symlink files for listing"
-        fi
-
-        (( ${#symlink_files[@]})) || die 50 "No .symlink files found in ${startpath@Q}"
-      fi
+      # Discover .symlink files. find_symlink_files surfaces a find failure as a
+      # real error (die 1), distinct from a genuinely empty tree (die 50).
+      local -- find_output=''
+      find_output=$(find_symlink_files "$startpath" listing) \
+        || die 1 "Error finding .symlink files for listing"
+      [[ -n "$find_output" ]] && mapfile -t symlink_files <<< "$find_output" ||:
+      (( ${#symlink_files[@]} )) || die 50 "No .symlink files found in ${startpath@Q}"
 
       debug "Found ${#symlink_files[@]} .symlink files for listing"
 
-      local -- symlink_dir
+      local -- symlink_dir line
       for symlink in "${symlink_files[@]}"; do
         symlink_dir=$(dirname -- "$symlink")
         echo "$(basename -- "$symlink_dir")/.symlink (${symlink_dir}):"
-        grep -v -- '^$\|^#' "$symlink" | sed 's/^/    /'
+        # Mirror the -S parser: strip inline comments, trim, skip blanks — so the
+        # listing shows exactly the entries scanning would act on.
+        while IFS= read -r line || [[ -n "$line" ]]; do
+          line="${line%$'\r'}"
+          line="${line%%#*}"
+          line=$(trim "$line")
+          [[ -z "$line" ]] && continue
+          printf '    %s\n' "$line"
+        done < "$symlink"
         echo
       done
       return 0
@@ -698,24 +845,13 @@ main() {
       die 3 "Cannot access directory ${startpath@Q}"
     fi
 
-    # First check if the startpath is actually /usr/local/bin or contains it
-    if [[ "$startpath" == "$DEFAULT_TARGET_DIR" || "$startpath" == "$DEFAULT_TARGET_DIR"/* ]]; then
-      # We're scanning in or below the target directory, which is dangerous
-      warn "Scanning in target directory ($DEFAULT_TARGET_DIR) is not recommended"
-      # To be extra safe, we just find the direct .symlink file
-      [[ -f "$startpath/.symlink" ]] || die 50 "No .symlink files found in ${startpath@Q}"
-      symlinks=("$startpath/.symlink")
-    else
-      # For standard directories, do a limited depth search
-      mapfile -t symlinks < <(
-          find "$startpath" -maxdepth "$FIND_MAX_DEPTH" \
-              -type f -name '.symlink' 2>/dev/null \
-            | sort -u
-          ) \
-        ||  die 1 "Error finding .symlink files"
-
-      (( ${#symlinks[@]} )) || die 50 "No .symlink files found in ${startpath@Q}"
-    fi
+    # Discover .symlink files. find_symlink_files surfaces a find failure as a
+    # real error (die 1), distinct from a genuinely empty tree (die 50).
+    local -- find_output=''
+    find_output=$(find_symlink_files "$startpath" scanning) \
+      || die 1 "Error finding .symlink files"
+    [[ -n "$find_output" ]] && mapfile -t symlinks <<< "$find_output" ||:
+    (( ${#symlinks[@]} )) || die 50 "No .symlink files found in ${startpath@Q}"
 
     debug "Found ${#symlinks[@]} .symlink files to process"
 
@@ -733,16 +869,16 @@ main() {
     debug "Processing in $batch_count batches"
 
     # Process in batches
-    local -i start=0 end=0 i=0 count=0
-    local -- symlink symlink_dir
+    local -i start=0 end=0 i=0 count=0 batch=0
+    local -- symlink symlink_dir line
     local -- script_path link_name source_file
     local -a link_names
     local -- source_raw remainder prev_char ch
-    local -i idx=0 len=0
+    local -i idx=0 len=0 bad_name=0
     for ((batch=0; batch<batch_count; batch+=1)); do
       start=$((batch * batch_size))
       end=$(( (batch + 1) * batch_size ))
-      (( end > total )) && end=$total
+      ((end <= total)) || end=$total
 
       info "Processing batch $((batch+1))/$batch_count"
       debug "Processing files $((start+1))-$end of $total"
@@ -794,11 +930,32 @@ main() {
             if [[ -n "$remainder" ]]; then
               read -ra link_names <<< "$remainder"
             else
-              link_names=("$(basename "$source_file")")
+              link_names=("${source_file##*/}")
             fi
           else
-            link_names=("$(basename "$source_file")")
+            link_names=("${source_file##*/}")
           fi
+
+          # Containment: .symlink content is trusted-but-verified. As root this
+          # blocks a hostile tree from publishing PATH symlinks that escape the
+          # .symlink directory (source) or the target directory (link name).
+          # Reject sources that are absolute or contain a .. path component...
+          if [[ "$source_file" == /* || "$source_file" == '..' \
+                || "$source_file" == '../'* || "$source_file" == *'/../'* \
+                || "$source_file" == *'/..' ]]; then
+            error "Refusing source outside .symlink dir ${source_file@Q}"
+            ERROR_LINKS+=("$script_path → $target_dir (source escapes tree)")
+            continue
+          fi
+          # ...and reject link names that are not a single bare filename.
+          bad_name=0
+          for link_name in "${link_names[@]}"; do
+            [[ "$link_name" == */* || "$link_name" == '.' || "$link_name" == '..' ]] || continue
+            error "Refusing unsafe link name (must be a bare filename) ${link_name@Q}"
+            ERROR_LINKS+=("$script_path → $target_dir/$link_name (unsafe link name)")
+            bad_name=1
+          done
+          ((bad_name)) && continue ||:
 
           # Validate source file once before creating links
           if [[ ! -f "$script_path" ]]; then
@@ -851,7 +1008,11 @@ main() {
   fi
 
   # Optionally clean up broken symlinks
-  ((DELETE_DEAD_SYMLINKS)) && delete_broken_symlinks "$target_dir"
+  # if-block, not `&& ... ||:`: keeps errexit live inside the call and does not
+  # mask a failure from it.
+  if ((DELETE_DEAD_SYMLINKS)); then
+    delete_broken_symlinks "$target_dir"
+  fi
 
   # Print summary of operations
   print_summary
@@ -859,7 +1020,7 @@ main() {
   # Return appropriate exit code
   if (( ${#ERROR_LINKS[@]} )); then
     ((exit_code)) || exit_code=1
-    warn "There were errors during processing. Please check the error log."
+    warn "There were errors during processing (see messages above)."
   elif (( ${#CREATED_LINKS[@]} == 0 && ${#REPLACED_LINKS[@]} == 0 )); then
     if (( ${#SKIPPED_LINKS[@]} )); then
       warn 'No symlinks created. All operations were skipped.'

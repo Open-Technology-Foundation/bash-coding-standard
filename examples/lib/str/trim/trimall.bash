@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Normalizes whitespace by stripping leading/trailing blanks and collapsing all consecutive blanks (spaces, tabs, newlines) to single spaces
 # shellcheck disable=SC2048,SC2086  # Intentional: unquoted expansion for word-splitting normalization
+# Normalizes whitespace by stripping leading/trailing blanks and collapsing all consecutive blanks (spaces, tabs, newlines) to single spaces
 
 trimall() {
   local -i process_escape=0 _f=0
@@ -65,9 +65,9 @@ trimall() {
 [[ ${BASH_SOURCE[0]} == "$0" ]] || { declare -fx trimall; return 0; }
 
 # --- command mode ---
+set -euo pipefail
 (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )) \
   || { >&2 echo "${0##*/}: requires Bash >= 4.4 (have ${BASH_VERSION:-unknown})"; exit 2; }
-set -euo pipefail
 shopt -s inherit_errexit shift_verbose extglob nullglob
 
 declare -rx PATH=/usr/local/bin:/usr/bin:/bin

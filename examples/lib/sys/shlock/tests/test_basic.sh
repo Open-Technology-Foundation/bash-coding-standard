@@ -1,23 +1,20 @@
 #!/bin/bash
+#shellcheck disable=SC2329  # cleanup() runs via the EXIT trap, helpers via "$@"
 # Basic functionality tests for shlock
 
 set -euo pipefail
 shopt -s inherit_errexit
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
 # Setup
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly -- SCRIPT_DIR
 readonly -- LOCK_SCRIPT="$SCRIPT_DIR/../shlock"
-readonly -- TEST_LOCK_DIR="/tmp/lock_tests_$$"
 declare -i TEST_COUNT=0
 declare -i TEST_PASSED=0
 
-# Create test lock directory
-mkdir -p "$TEST_LOCK_DIR"
-
 # Cleanup function
 cleanup() {
-  rm -rf "$TEST_LOCK_DIR"
   # Clean up any locks created during tests
   rm -f /run/lock/test_*.lock /run/lock/test_*.pid 2>/dev/null || true
 }
@@ -27,9 +24,9 @@ trap cleanup EXIT
 assert_success() {
   local -- msg=$1
   shift
-  ((++TEST_COUNT))
+  TEST_COUNT+=1
   if "$@"; then
-    ((++TEST_PASSED))
+    TEST_PASSED+=1
     echo "  ✓ $msg"
     return 0
   else
@@ -41,12 +38,12 @@ assert_success() {
 assert_failure() {
   local -- msg=$1
   shift
-  ((++TEST_COUNT))
+  TEST_COUNT+=1
   if "$@"; then
     echo "  ✗ $msg (expected failure, got success)"
     return 1
   else
-    ((++TEST_PASSED))
+    TEST_PASSED+=1
     echo "  ✓ $msg"
     return 0
   fi
@@ -56,16 +53,13 @@ assert_exit_code() {
   local -- msg=$1
   local -i expected=$2
   shift 2
-  ((++TEST_COUNT))
+  TEST_COUNT+=1
 
   local -i actual=0
-  set +e
-  "$@"
-  actual=$?
-  set -e
+  "$@" || actual=$?
 
   if ((actual == expected)); then
-    ((++TEST_PASSED))
+    TEST_PASSED+=1
     echo "  ✓ $msg (exit code: $actual)"
     return 0
   else
@@ -73,6 +67,22 @@ assert_exit_code() {
     return 1
   fi
 }
+
+file_exists() { [[ -f $1 ]]; }
+
+# Reap a background job; abort unless its status is one of the allowed codes
+# (143 = killed by the test's own TERM). Never discards a wait status.
+reap() {
+  local -i pid=$1 rc=0
+  shift
+  wait "$pid" 2>/dev/null || rc=$?
+  [[ " $* " == *" $rc "* ]] && return 0
+  >&2 echo "  ✗ background job $pid exited $rc (allowed: $*)"
+  exit 1
+}
+
+# Abort when fixture setup fails: the assertions that follow would test the wrong state.
+setup_failed() { >&2 echo "  ✗ FATAL: fixture setup failed (line ${BASH_LINENO[0]})"; exit 1; }
 
 # Tests
 echo "Test: Basic command execution"
@@ -87,21 +97,21 @@ assert_success "Execute command with multiple arguments" \
 echo
 echo "Test: Lock file creation"
 "$LOCK_SCRIPT" test_basic_3 -- sleep 0.1 &
-LOCK_PID=$!
+declare -i LOCK_PID=$!
 sleep 0.05
 assert_success "Lock file exists while command runs" \
-  test -f /run/lock/test_basic_3.lock
+  file_exists /run/lock/test_basic_3.lock
 assert_success "PID file exists while command runs" \
-  test -f /run/lock/test_basic_3.pid
-wait "$LOCK_PID" || true
+  file_exists /run/lock/test_basic_3.pid
+reap "$LOCK_PID" 0
 
 echo
 echo "Test: Lock file cleanup after command completes"
-"$LOCK_SCRIPT" test_basic_4 -- echo "test" >/dev/null
+"$LOCK_SCRIPT" test_basic_4 -- echo "test" >/dev/null || setup_failed
 assert_success "Lock file persists after command completes (flock behavior)" \
-  test -f /run/lock/test_basic_4.lock
+  file_exists /run/lock/test_basic_4.lock
 assert_failure "PID file removed after command completes" \
-  test -f /run/lock/test_basic_4.pid
+  file_exists /run/lock/test_basic_4.pid
 
 echo
 echo "Test: Exit code propagation"
@@ -149,20 +159,19 @@ assert_exit_code "Invalid bundle -wz (unknown -z)" 22 \
 
 echo
 echo "Test: PID file contents"
-"$LOCK_SCRIPT" test_basic_10 -- sleep 0.2 &
+"$LOCK_SCRIPT" test_basic_10 -- sleep 1 &
 LOCK_PID=$!
-sleep 0.1
-if [[ -f /run/lock/test_basic_10.pid ]]; then
-  PID_CONTENT=$(cat /run/lock/test_basic_10.pid)
-  ((++TEST_COUNT))
-  if [[ "$PID_CONTENT" =~ ^[0-9]+$ ]]; then
-    ((++TEST_PASSED))
-    echo "  ✓ PID file contains valid PID"
-  else
-    echo "  ✗ PID file contains invalid data: $PID_CONTENT"
-  fi
+sleep 0.3
+# One read and no separate -f test: the file vanishes when the holder exits
+TEST_COUNT+=1
+declare -- PID_CONTENT=''
+if read -r PID_CONTENT 2>/dev/null </run/lock/test_basic_10.pid && [[ $PID_CONTENT =~ ^[0-9]+$ ]]; then
+  TEST_PASSED+=1
+  echo "  ✓ PID file contains valid PID"
+else
+  echo "  ✗ PID file missing or invalid: ${PID_CONTENT@Q}"
 fi
-wait "$LOCK_PID" || true
+reap "$LOCK_PID" 0
 
 # Summary
 echo

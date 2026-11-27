@@ -34,6 +34,9 @@ Sourceable for 12x faster interactive use
 Consistent behavior across all Unix/Linux systems
 .SH OPTIONS
 Options can be combined: \fB\-ac\fR is equivalent to \fB\-a \-c\fR.
+Option parsing stops at the first non-option argument (getopts-style), so
+options must precede the command names \(em matching debianutils
+.BR which (1).
 .TP
 .BR \-a ", " \-\-all
 Print all matching pathnames of each argument, not just the first match.
@@ -67,7 +70,7 @@ different error conditions:
 All specified commands found successfully.
 .TP
 .B 1 (EXIT_NOT_FOUND)
-One or more commands not found.
+One or more commands not found, or no arguments were given.
 .TP
 .B 2 (EXIT_INVALID_OPTION)
 Invalid command-line option.
@@ -150,7 +153,7 @@ $ which /usr/local/bin/my\-script
 /usr/local/bin/my-script
 
 $ which ./local\-tool
-./local-tool
+\&./local-tool
 .fi
 .RE
 .SH SOURCEABLE MODE
@@ -178,8 +181,7 @@ A shell function skips all of this, running in ~0.13ms (in-process).
 source /usr/local/bin/which
 
 # Option 2: System-wide via profile.d
-sudo make install-sourceable
-# Installs to /etc/profile.d/which.sh
+sudo cp which /etc/profile.d/which.sh
 
 # Now which runs as a shell function
 which ls  # ~7500 ops/s vs ~600 ops/s
@@ -202,10 +204,19 @@ isn\(aqt available in new terminals, add to your
 source /etc/profile.d/which.sh
 .fi
 .RE
-.SS Function Export
-The script uses
-.B declare \-fx which
-to export the function to subshells, making it available in scripts launched from your interactive shell.
+.SS Namespace Hygiene
+The function is
+.B not
+exported with
+.BR "declare \-fx" :
+that would shadow the system
+.B which
+in every child shell and leak this implementation's semantics. A sourced
+.B which()
+lives only in the shell that sourced it; that shell's children resolve the
+real
+.B which
+binary on PATH.
 .SH ARCHITECTURE
 .SS Dual-Mode Design
 The script is structured to work in two modes:
@@ -218,41 +229,48 @@ Run as
 .B source which; which ls
 \(em function runs in current shell, no subprocess overhead.
 .PP
-This is achieved with the BASH_SOURCE guard:
+This is achieved with a
+.B source fence
+\(em a top-level
+.B return
+that succeeds only when the file is sourced:
 .PP
 .RS
 .nf
 which() {
   # ... function body ...
 }
-declare \-fx which
 
-[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
-
-# Script mode only (direct execution)
-set \-euo pipefail
-shopt \-s inherit_errexit
-which "$@"
+# --- source fence ---
+return 0 2>/dev/null || {
+  # --- direct execution ---
+  set \-euo pipefail
+  shopt \-s inherit_errexit
+  which "$@"
+}
 .fi
 .RE
 .PP
-When sourced,
-.B BASH_SOURCE[0]
-differs from
-.BR $0 ,
-so
+When sourced, the top-level
 .B return 0
-exits early after defining the function.
-When executed directly, they match, so the script continues to apply strict mode
-and run the function.
+succeeds and short-circuits the
+.BR || ,
+leaving only the
+.B which()
+function defined.
+When executed,
+.B return
+outside a function fails (silenced by
+.BR 2>/dev/null ),
+so the braced block applies strict mode and runs the function.
 .SS Strict Mode Without Pollution
 Traditional bash scripts enable strict mode
 .RB ( "set \-euo pipefail" )
 at the top, but this would pollute the sourcing shell's environment.
 .B which
 solves this by placing strict mode
-.I after
-the BASH_SOURCE guard:
+.I inside
+the source fence:
 .IP \(bu 2
 \fBSourced\fR: Returns before reaching strict mode \(em caller's shell unaffected
 .IP \(bu 2
@@ -273,7 +291,7 @@ instead of
 .IP \(bu 2
 Inline PATH parsing (no helper functions to leak)
 .IP \(bu 2
-Conditional help: brief when sourced, full when executed
+Help text inlined under \fB\-h\fR \(em the same usage text in both modes
 .SH POSIX COMPLIANCE
 .SS Empty PATH Elements
 Per POSIX, an empty element in PATH means the current directory.
@@ -284,7 +302,7 @@ handles this correctly, unlike many implementations:
 .nf
 # Leading colon = empty first element = current directory
 $ PATH=":/usr/bin" which ./my\-script
-./my-script
+\&./my-script
 
 # Double colon = empty middle element
 $ PATH="/usr/bin::/usr/local/bin" which ls
@@ -317,9 +335,7 @@ Version 4.4 or later.
 .BR realpath (1)
 Required for canonical path resolution
 .RB ( \-c
-option). Falls back to
-.BR readlink (1)
-if unavailable.
+option); invoked with a pinned PATH so it cannot be hijacked.
 .SH SEE ALSO
 .BR whereis (1),
 .BR type (1),

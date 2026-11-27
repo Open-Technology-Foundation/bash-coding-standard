@@ -1,6 +1,6 @@
 # MD2ANSI (Bash Implementation)
 
-![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)
+![Version](https://img.shields.io/badge/version-1.0.2-blue.svg)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green.svg)
 ![Shell](https://img.shields.io/badge/bash-5.2+-orange.svg)
 ![Status](https://img.shields.io/badge/status-stable-brightgreen.svg)
@@ -17,7 +17,7 @@ This is a pure Bash implementation of the md2ansi markdown-to-ANSI formatter, de
 - ✓ Full markdown support (headers, lists, tables, code blocks, formatting)
 - ✓ 256-color ANSI output
 - ✓ Syntax highlighting for Python, JavaScript, and Bash
-- ✓ Security features (file size limits, input sanitization, ReDoS protection)
+- ✓ Security features (file size limits, input sanitization)
 - ✓ Compatible with Python version's command-line interface
 - ✓ Browser-based markdown preview with pandoc (`mdview`)
 
@@ -226,13 +226,13 @@ curl -s https://raw.githubusercontent.com/user/repo/main/README.md | md2ansi
 - ✓ ANSI-aware text wrapping
 - ✓ Terminal width auto-detection
 - ✓ Feature toggles (--no-tables, --no-syntax-highlight, etc.)
-- ✓ Plain text mode for non-ANSI terminals
+- ✓ Plain mode (--plain): every feature toggle off at once
+- ✓ Colorless output with TERM=dumb (log files, non-ANSI terminals)
 - ✓ Debug mode with detailed traces
 
 **Security:**
 - ✓ File size limits (10MB maximum)
 - ✓ Input sanitization (ANSI escape removal)
-- ✓ ReDoS protection with timeout
 - ✓ Proper signal handling
 
 ## Utility Scripts
@@ -380,9 +380,12 @@ md2ansi -D file.md
 md2ansi --width 100 README.md
 md2ansi -w 80 file.md
 
-# Plain text mode (all formatting disabled)
+# Plain mode: every feature toggle off (colors remain)
 md2ansi --plain README.md
 md2ansi -t file.md
+
+# No ANSI codes at all (colors and styles off)
+TERM=dumb md2ansi README.md
 ```
 
 ### Feature Toggles
@@ -421,8 +424,8 @@ md2ansi -w 60 README.md
 # Debug table parsing issues
 md2ansi -D tables.md 2>&1 | grep -i table
 
-# Plain mode for piping to log files
-md2ansi --plain CHANGELOG.md >> release-notes.txt
+# No ANSI codes when appending to log files
+TERM=dumb md2ansi CHANGELOG.md >> release-notes.txt
 
 # Disable heavy features for faster processing
 md2ansi --no-syntax-highlight --no-tables large-file.md
@@ -577,16 +580,16 @@ diff <(md2ansi version1.md) <(md2ansi version2.md)
 | **Installation** | Copy one file | `pip install` | Bash: zero dependencies |
 | **Startup Time** | ~50ms | ~30ms | Bash slightly slower |
 | **Processing Speed** | 2-3x slower | Baseline | Python faster for large files |
-| **File Size** | 1,424 lines (42KB) | ~800 lines | Bash more verbose (md2ansi only) |
+| **File Size** | 1,223 lines (36KB) | ~800 lines | Bash more verbose (md2ansi only) |
 | **Dependencies** | None (coreutils only) | Python 3.7+ | Bash more portable |
 | **Design** | Monolithic single file | Single module | Both self-contained |
 | **Features** | 100% compatible | Full feature set | Identical CLI |
 | **Syntax Highlighting** | Line-based regex | Token-based parser | Python more sophisticated |
 | **Error Handling** | `set -e` + trap | try/except | Different paradigms |
-| **ReDoS Protection** | `timeout` command | multiprocessing | Different approaches |
+| **ReDoS Protection** | None (no regex timeout) | `multiprocessing` timeout | Python only |
 | **Memory Usage** | Very low | Low | Both efficient |
 | **Platform** | Linux/Unix/macOS | Cross-platform | Python more portable |
-| **Security** | Built-in limits | Built-in limits | Equivalent protection |
+| **Security** | Built-in limits | Built-in limits | Python adds a regex timeout |
 
 **Recommendation:**
 - **Use Bash version**: Quick installation, zero dependencies, system integration
@@ -624,7 +627,7 @@ diff <(md2ansi version1.md) <(md2ansi version2.md)
 
 ### Design Philosophy
 
-md2ansi follows a **monolithic single-file design** for maximum portability and zero installation friction. All core functionality is embedded in one executable file (`md2ansi`, 1,424 lines) with no external libraries or modules. The `mdview` browser preview utility (297 lines) is a separate companion script.
+md2ansi follows a **monolithic single-file design** for maximum portability and zero installation friction. All core functionality is embedded in one executable file (`md2ansi`, 1,223 lines) with no external libraries or modules. The `mdview` browser preview utility (297 lines) is a separate companion script.
 
 **Design Benefits:**
 
@@ -641,7 +644,7 @@ md2ansi follows a **monolithic single-file design** for maximum portability and 
 
 ```
 md2ansi.bash/
-├── md2ansi               # Main executable (1,424 lines, 42KB)
+├── md2ansi               # Main executable (1,223 lines, 36KB)
 │                         # ◉ All functionality in single file
 ├── md2ansi.bash          # Symlink → md2ansi
 ├── md                    # Pagination wrapper (53 lines)
@@ -671,17 +674,17 @@ md2ansi.bash/
     ├── test_md.sh             # md pagination wrapper (45 lines)
     ├── test_md_link_extract.sh # md-link-extract URL extraction (136 lines)
     ├── test_mdview.sh         # mdview utility tests (173 lines)
-    ├── test_options.sh        # Feature toggles (96 lines)
+    ├── test_options.sh        # Feature toggles (106 lines)
     ├── test_security.sh       # Security features (133 lines)
     ├── test_tables.sh         # Tables (96 lines)
     └── test_wrapping.sh       # Text wrapping (182 lines)
 ```
 
 **Total Project Size:**
-- Main executable: 1,424 lines
+- Main executable: 1,223 lines
 - Utility scripts: 734 lines (md, ansi-info, md-link-extract, mdview)
-- Test suite: 1,872 lines (13 test files + runner)
-- **Total: 4,030 lines**
+- Test suite: 1,882 lines (13 test files + runner)
+- **Total: 3,839 lines**
 
 ### Internal Code Organization
 
@@ -689,21 +692,21 @@ The `md2ansi` script is organized into clearly marked sections:
 
 | Section | Lines | Purpose |
 |:--------|:------|:--------|
-| **Script Header** | 1-35 | Shebang, strict mode, metadata, global variables, state tracking |
-| **Utility Functions** | 36-161 | Messaging, terminal detection, file validation, signal handling, string manipulation |
-| **ANSI Color Definitions** | 162-258 | Color constants, ANSI escape sequences, color detection, strip/sanitize functions |
-| **Rendering Functions** | 259-644 | Bold, italic, strikethrough, links, inline code, text wrapping, header/list/blockquote rendering |
-| **Table Rendering Functions** | 645-951 | Table parsing, alignment detection, column width calculation, table output rendering |
-| **Markdown Parser Functions** | 952-1194 | Main parser, code blocks, tables, headers, lists, footnotes, regular text processing |
-| **Main Script Functions** | 1195-1424 | Argument parsing, file processing, main entry point, program invocation |
+| **Script Header** | 1-38 | Shebang, strict mode, metadata, global variables, state tracking |
+| **Utility Functions** | 39-150 | Messaging, terminal detection, file validation, signal handling, string manipulation |
+| **ANSI Color Definitions** | 151-246 | Color constants, ANSI escape sequences, color detection, strip/sanitize functions |
+| **Rendering Functions** | 247-551 | Bold, italic, strikethrough, links, inline code, text wrapping, header/list/blockquote rendering |
+| **Table Rendering Functions** | 552-794 | Table parsing, alignment detection, column width calculation, table output rendering |
+| **Markdown Parser Functions** | 795-1010 | Main parser, code blocks, tables, headers, lists, footnotes, regular text processing |
+| **Main Script Functions** | 1011-1223 | Argument parsing, file processing, main entry point, program invocation |
 
-Section line numbers drift as the file grows; verify with `grep -n '^# ====' md2ansi`.
+Section line numbers drift as the file grows; verify with `grep -n -A1 '^# ---' md2ansi`.
 
-Each section is marked with clear header comments:
+Each section opens with an 80-dash divider and a short title. These six are the
+only dividers in the file; functions inside a section carry their own doc comments:
 ```bash
-# ================================================================================
-# ANSI Color Definitions
-# ================================================================================
+# --------------------------------------------------------------------------------
+# ANSI color definitions
 ```
 
 ### State Management
@@ -767,15 +770,15 @@ The project includes a comprehensive test suite with 13 test files covering all 
 | **test_edge_cases.sh** | 208 | Empty files, malformed input, edge cases, error handling |
 | **test_footnotes.sh** | 105 | Footnote references, definitions, ordering, missing definitions |
 | **test_gaps.sh** | 163 | Audit gap coverage, combined flag parsing, fence mismatch handling |
-| **test_md.sh** | 45 | `md` pagination wrapper, --version propagation, less flag passthrough |
+| **test_md.sh** | 45 | `md` pagination wrapper, its own --help/--version, less flag passthrough |
 | **test_md_link_extract.sh** | 136 | Inline / reference / bare-URL extraction, dedupe, multi-file |
 | **test_mdview.sh** | 173 | mdview CLI options, argument validation, sourced mode, full pipeline |
-| **test_options.sh** | 96 | Feature toggles, --no-* options, plain mode, option combinations |
-| **test_security.sh** | 133 | File size limits, line length limits, input sanitization, ReDoS protection |
+| **test_options.sh** | 106 | Feature toggles, --no-* options, plain mode, option combinations |
+| **test_security.sh** | 133 | File size limits, line length limits, input sanitization, pathological regex input |
 | **test_tables.sh** | 96 | Table parsing, alignment (left/center/right), borders, inline formatting in cells |
 | **test_wrapping.sh** | 182 | Text wrapping, ANSI-aware wrapping, terminal width handling |
 
-**Total test coverage: 1,872 lines**
+**Total test coverage: 1,882 lines**
 
 ### Running Tests
 
@@ -920,7 +923,6 @@ cat debug.log
 - ◉ Terminal width detection
 - ◉ File size validation
 - ◉ Table parsing steps (column count, alignment)
-- ◉ Regex operation timeouts
 - ◉ Feature flag states
 
 ### Code Review Checklist
@@ -978,9 +980,8 @@ For reference, processing a 1MB markdown file:
 
 | Feature | Implementation | Limit/Behavior |
 |:--------|:---------------|:---------------|
-| **File Size Limits** | Pre-processing validation with `wc -c` | 10MB maximum (configurable) |
-| **Input Sanitization** | ANSI escape sequence removal | All input cleaned via `strip_ansi()` |
-| **ReDoS Protection** | `timeout` command wrapper for regex | 1 second timeout on complex patterns |
+| **File Size Limits** | Pre-processing validation with `stat -c %s` | 10MB maximum (configurable) |
+| **Input Sanitization** | Escape/control sequence removal | All input cleaned at read time via `sanitize_input()` (CSI, OSC, C0/C1 controls) |
 | **Injection Prevention** | Proper variable quoting throughout | All expansions quoted |
 | **Signal Handling** | `trap` cleanup handlers | Graceful Ctrl-C, proper exit |
 | **Bounds Checking** | Terminal width validation | 20-500 column range |
@@ -993,11 +994,8 @@ For reference, processing a 1MB markdown file:
 # File size is checked before processing
 validate_file_size "$filepath" "$MAX_FILE_SIZE"
 
-# Input is sanitized
-code=$(sanitize_ansi "$code")
-
-# Complex regex uses timeout
-timeout 1 sed "s/$pattern/$replacement/g" <<<"$text"
+# Input is sanitized once, as it is read (file or stdin)
+done < <(sanitize_input "$filepath")
 
 # All variables are quoted
 printf '%s\n' "$variable"
@@ -1021,7 +1019,7 @@ A: Yes, as long as you have Bash 5.2+ installed. macOS ships with Bash 3.2, so i
 
 **Q: Can I use this in scripts and automation?**
 
-A: Absolutely. Use `--plain` mode for log files, or pipe to `less -R` for interactive viewing.
+A: Absolutely. For log files use `TERM=dumb md2ansi file.md`, which writes no ANSI codes (`--plain` only turns off formatting features and keeps colors). For interactive viewing, pipe to `less -R`.
 
 **Q: How do I check if my terminal supports 256 colors?**
 
@@ -1043,7 +1041,7 @@ A: Run `chmod +x md2ansi md ansi-info md-link-extract mdview` to make scripts ex
 
 **Q: Output is garbled?**
 
-A: Your terminal may not support ANSI codes. Use `--plain` mode: `md2ansi --plain file.md`.
+A: Your terminal may not support ANSI codes. Turn them off with `TERM=dumb md2ansi file.md` (`--plain` keeps colors).
 
 **Q: Tables not rendering correctly?**
 
@@ -1159,11 +1157,10 @@ All tools are standard and available on any modern Linux/Unix system:
 | Tool | Package | Purpose |
 |:-----|:--------|:--------|
 | `tput` | ncurses | Terminal capability detection, color support |
-| `wc` | coreutils | File size validation |
+| `stat` | coreutils | File size validation |
 | `sed` | coreutils | Regex substitution for formatting |
 | `awk` | coreutils | Text processing (minimal usage) |
 | `grep` | coreutils | Pattern matching (minimal usage) |
-| `timeout` | coreutils | ReDoS protection wrapper |
 | `less` | util-linux | Pagination in `md` wrapper |
 | `stty` | coreutils | Terminal size detection fallback |
 | `pandoc` | pandoc | Markdown-to-HTML conversion (`mdview` only) |
@@ -1188,10 +1185,10 @@ See [LICENSE](LICENSE) file for full text.
 
 | Metric | Value |
 |:-------|:------|
-| **md2ansi Lines** | 1,424 lines (42KB) |
+| **md2ansi Lines** | 1,223 lines (36KB) |
 | **Total Scripts** | 5 main + 1 test runner + 13 test files |
-| **Test Coverage** | 1,872 lines across 13 test files |
-| **Total Project** | 4,030 lines |
+| **Test Coverage** | 1,882 lines across 13 test files |
+| **Total Project** | 3,839 lines |
 | **Features** | 15+ markdown elements |
 | **Dependencies** | 0 (zero) |
 | **Installation** | Single file copy (md2ansi); mdview adds themes |
@@ -1212,6 +1209,6 @@ See [LICENSE](LICENSE) file for full text.
 
 **Status**: ✓ Core implementation complete and functional
 
-**Version**: 1.0.1
+**Version**: 1.0.2
 
 #fin

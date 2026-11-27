@@ -5,6 +5,73 @@ All notable changes to dux are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.5.0] - 2026-11-26
+
+### Added
+- `-x, --one-file-system`: stay on the target's filesystem. Subdirectories
+  that are mount points of other filesystems are left out and sizes exclude
+  other mounts (as `du -x`), so `sudo dux -x /` no longer counts `/proc`
+  (whose `kcore` alone has an apparent size of 128 TiB) or network mounts.
+
+### Fixed
+- Reject extra operands after `--` with canonical usage exit code `2` instead
+  of silently ignoring trailing arguments.
+- Keep installer metadata in sync with runtime version (`install.sh` reports the
+  same version as `dux`).
+- Sync man page metadata and exit-code documentation with runtime behavior
+  (`0, 2, 3, 5, 22`).
+- Handle newlines in subdirectory names (previously aborted with exit `5`) and
+  preserve trailing whitespace in names (previously stripped from the output);
+  the pipeline is now NUL-delimited end to end.
+- Accept a directory name beginning with `-` (`dux -- -dir`); it was parsed
+  as a `find` expression and failed with exit `3`. Such a path is shown with a
+  `./` prefix. The same now applies to directories named `(` or `!`.
+- A path ending in repeated slashes (`dux dir//`) failed with exit `5`; it is
+  now normalised to a single trailing slash. (Regression introduced by the
+  parallel `du` change below; never released.)
+- `-L` now passes `-L` to `du` as well as `find`: a symlinked starting
+  directory or subdirectory was sized as the link itself (a few bytes).
+- A symlinked starting directory now works without `-L` (`find -H`, `du -D`,
+  as `ls` and `du` treat their operands); it previously failed with exit `3`
+  unless given a trailing slash.
+- An empty operand (`dux ''`) now exits `3` (`Not a directory ''`) instead of
+  silently sizing the current directory, and counts towards the one-operand
+  limit (`dux '' /tmp` exits `2`).
+- Sizes use `.` as the decimal point in every locale (`id_ID` printed
+  `1,5KB`).
+- `install.sh` no longer always warns that `~/.local/bin` is not in `PATH`; it
+  checked its own locked-down `PATH` instead of the caller's.
+- Bash completion registers with `-o filenames`, so directory names containing
+  spaces are escaped and completed directories get a trailing `/`.
+
+### Changed
+- **BREAKING:** size labels are now `KiB`, `MiB`, `GiB`, `TiB` (were `KB`,
+  `MB`, `GB`, `TB` on the same base-1024 numbers), as `--help`, the README
+  and the man page always documented. Scripts that match `KB`/`MB` in the
+  size column must update; the numbers themselves are unchanged.
+- A subdirectory that disappears between listing and sizing is left out
+  instead of aborting the whole run with exit `5`; `dux /proc` always failed
+  because `find` listed its own short-lived PID directory. Exit `5` now means
+  `du` returned no size for a directory that still exists.
+- `--help` and the README state that sizes are apparent sizes (`du -b`).
+- Measure subdirectories in parallel: one `du -sb` per directory, one job per
+  CPU via `xargs`. Reported sizes are unchanged, including for hard links.
+- Format the whole result with a single `numfmt` instead of one per line.
+- Drop the temporary file and its `SIGINT/SIGTERM/EXIT` trap; `mktemp` is no
+  longer a failure mode behind exit `5`, and a `SIGTERM` now exits `143`.
+- `find`/`xargs` (findutils) and `nproc` are now required alongside `du`,
+  `sort` and `numfmt`.
+- Remove undocumented `-v/--verbose` alias from argument parsing; verbose mode
+  remains the default behavior.
+- Add argument-contract tests for `--` edge cases and invalid combined options.
+- `dux` enables the full BCS `shopt` set (`shift_verbose extglob nullglob`).
+- Test harness: `assert_contains`/`assert_not_contains` match literal
+  substrings instead of regexes, and `warn` is reported as a warning rather
+  than counted as a pass. The relative-path output test, which could never
+  match and always warned, now asserts.
+
 ## [1.4.4] - 2026-05-06
 
 ### Fixed
@@ -95,6 +162,8 @@ I/O failures previously masked under `1` now surface as `5`.
 - Support for relative and absolute paths
 - Permission error handling (continues with accessible content)
 
+[Unreleased]: https://github.com/Open-Technology-Foundation/dux/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/Open-Technology-Foundation/dux/compare/v1.4.4...v1.5.0
 [1.4.4]: https://github.com/Open-Technology-Foundation/dux/compare/v1.4.3...v1.4.4
 [1.4.3]: https://github.com/Open-Technology-Foundation/dux/compare/v1.4.2...v1.4.3
 [1.4.2]: https://github.com/Open-Technology-Foundation/dux/compare/v1.4.1...v1.4.2

@@ -84,6 +84,7 @@ Requires Python 3.12+ (stdlib only — no external dependencies).
 - **Timezone caching**: System timezone is cached on first call for performance
 - **Global storage**: Result stored in `EPOCHSPACETIME` (Bash), `$GLOBALS['EPOCHSPACETIME']` (PHP), or `spacetime.EPOCHSPACETIME` (Python)
 - **Version/help flags**: All implementations support `-V`/`--version` and `-h`/`--help`
+- **Dash-leading templates**: a template beginning with `-` must follow `--` (`./spacetime -- "-{{date}}"`); any other `-*` argument is rejected as an invalid option (exit 22). Identical across all implementations
 - **Dual usage**: Bash script can be sourced as a function; Python file can be imported as a module; both can also be executed directly
 
 ## Environment

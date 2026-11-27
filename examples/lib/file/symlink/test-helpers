@@ -304,7 +304,7 @@ assert_file_perms() {
 assert_output_contains() {
   local -r expected_text="${1}"
 
-  if [[ ! "${TEST_OUTPUT}" =~ ${expected_text} ]]; then
+  if [[ "${TEST_OUTPUT}" != *"${expected_text}"* ]]; then
     fail "Output does not contain '${expected_text}'"
     fail "Output was: ${TEST_OUTPUT}"
     return 1
@@ -318,7 +318,7 @@ assert_output_contains() {
 assert_output_not_contains() {
   local -r unexpected_text="${1}"
 
-  if [[ "${TEST_OUTPUT}" =~ ${unexpected_text} ]]; then
+  if [[ "${TEST_OUTPUT}" == *"${unexpected_text}"* ]]; then
     fail "Output contains unexpected text '${unexpected_text}'"
     fail "Output was: ${TEST_OUTPUT}"
     return 1
@@ -351,6 +351,24 @@ run_symlink_sudo() {
   local -i exit_code=0
 
   TEST_OUTPUT="$(sudo -E "${SYMLINK_BIN}" "$@" 2>&1)" || exit_code=$?
+  TEST_EXIT_CODE=${exit_code}
+
+  return ${exit_code}
+}
+
+# Run symlink under a pseudo-terminal, feeding INPUT to interactive prompts.
+# yn() reads from /dev/tty, so a real pty (via script(1)) is required to drive
+# the interactive confirmation paths. stdin becomes a tty, so PROMPT=1.
+# Arguments: $1=input string fed to prompts, $2..=symlink arguments
+# Sets: TEST_OUTPUT, TEST_EXIT_CODE
+run_symlink_pty() {
+  local -- input="$1"; shift
+  local -i exit_code=0
+  local -- cmd arg
+  printf -v cmd 'sudo -E %q' "${SYMLINK_BIN}"
+  for arg in "$@"; do printf -v cmd '%s %q' "${cmd}" "${arg}"; done
+  TEST_OUTPUT="$(printf '%s' "${input}" | script -qec "${cmd}" /dev/null 2>&1)" \
+    || exit_code=$?
   TEST_EXIT_CODE=${exit_code}
 
   return ${exit_code}

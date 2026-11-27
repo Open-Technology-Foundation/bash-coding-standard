@@ -150,8 +150,8 @@ main() {
   for test_file in "$SCRIPT_DIR"/test_*.sh; do
     if [[ -f $test_file ]]; then
       echo "${CYAN}Running: ${test_file##*/}${NC}"
-      # shellcheck disable=SC1090
-      source "$test_file"
+      # shellcheck disable=SC1090  # test file paths are only known at run time
+      source -- "$test_file" ||:  # a failed assertion returns 1; errexit would end the run there
       echo ""
     fi
   done

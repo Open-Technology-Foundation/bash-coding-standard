@@ -4,7 +4,7 @@ This document describes the comprehensive test suite for the `symlink` script.
 
 ## Overview
 
-The test suite provides extensive coverage of all `symlink` functionality with 85 organized test cases covering:
+The test suite provides extensive coverage of all `symlink` functionality with 97 organized test cases covering:
 
 - Option parsing and validation
 - Single file symlinking operations
@@ -74,7 +74,7 @@ The test harness will display:
 Example output:
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Running 85 test(s)
+Running 97 test(s)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ✓ Help flag (short)
@@ -87,8 +87,8 @@ Running 85 test(s)
 Test Summary
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Total:   85
-Passed:  85
+Total:   97
+Passed:  97
 Failed:  0
 Skipped: 0
 
@@ -407,18 +407,20 @@ Current test coverage:
 | Area | Test Count | Coverage |
 |------|------------|----------|
 | Option Parsing | 20 | Comprehensive |
-| File Operations | 9 | Comprehensive |
+| File Operations | 11 | Comprehensive |
 | Dry-Run Mode | 4 | Complete |
 | Broken Symlinks | 4 | Complete |
 | .symlink Processing | 17 | Comprehensive |
 | Path Resolution | 3 | Core cases |
-| Critical Files | 4 | Complete |
+| Critical Files (incl. pty prompts) | 8 | Complete |
 | Debug Mode | 4 | Comprehensive |
+| PATH-shadow Advisory | 2 | Core cases |
+| Containment / Security | 4 | Core cases |
 | Exit Codes | 5 | Key codes |
 | Edge Cases | 9 | Common cases |
 | Integration | 3 | Key workflows |
 | Summary | 3 | Core cases |
-| **Total** | **85** | **High** |
+| **Total** | **97** | **High** |
 
 ### Not Yet Covered
 

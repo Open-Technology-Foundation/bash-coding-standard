@@ -383,6 +383,39 @@ run_tests() {
   assert_exit 0 $rc "ext: PATH with relative dir"
   popd >/dev/null || return 1
 
+  # --- DROP-IN COMPATIBILITY & SECURITY ---
+  echo "# Drop-in compatibility & security"
+
+  # Options after the first operand are literal targets, not parsed (debianutils parity)
+  out=$(PATH="$TESTPATH" "$WHICH" testcmd -s 2>&1); rc=$?
+  assert_exit 1 $rc "dropin: option after operand not parsed (-s looked up as a name)"
+  assert_contains "testcmd" "$out" "dropin: operand before a stray option is still printed"
+
+  # Bare - is a filename operand, not an illegal option (rc 1, not 2; no error)
+  out=$("$WHICH" - 2>&1); rc=$?
+  assert_exit 1 $rc "dropin: bare - is a not-found operand (rc 1)"
+  if [[ "$out" != *"Illegal option"* ]]; then ok "dropin: bare - emits no Illegal option error"; else not_ok "dropin: bare - emits no Illegal option error (got '$out')"; fi
+
+  # Trailing -- after an operand is a literal target (debianutils parity)
+  out=$(PATH="$TESTPATH" "$WHICH" testcmd -- 2>&1); rc=$?
+  assert_exit 1 $rc "dropin: trailing -- after operand looked up as a name"
+
+  # Trailing-slash PATH element joins raw (double slash), matching debianutils byte-for-byte
+  out=$(PATH="$TESTDIR/bin1/:/usr/bin" "$WHICH" testcmd 2>&1); rc=$?
+  assert_exit 0 $rc "dropin: executable found via trailing-slash PATH element"
+  assert_contains "$TESTDIR/bin1//testcmd" "$out" "dropin: trailing-slash PATH joins raw (byte-parity)"
+
+  # -c must not execute a PATH-supplied realpath (no hijack -> no arbitrary code exec)
+  local hijackdir
+  hijackdir=$(mktemp -d)
+  printf '#!/bin/sh\necho HIJACKED\n' > "$hijackdir/realpath"
+  chmod +x "$hijackdir/realpath"
+  out=$(PATH="$hijackdir:$TESTDIR/bin1:/usr/bin:/bin" "$WHICH" -c symcmd 2>&1); rc=$?
+  assert_exit 0 $rc "security: -c succeeds with a hostile realpath on PATH"
+  assert_contains "testcmd" "$out" "security: -c uses the system realpath (resolves symlink)"
+  if [[ "$out" != *HIJACKED* ]]; then ok "security: -c does not execute a PATH-supplied realpath"; else not_ok "security: -c executed a PATH-supplied realpath (HIJACK)"; fi
+  rm -rf "$hijackdir"
+
   # --- SOURCED MODE ---
   echo "# Sourced mode"
 
@@ -427,10 +460,14 @@ run_tests() {
   out=$(bash -c "source '$WHICH'; shopt -q -o pipefail && echo FAIL || echo OK"); rc=$?
   assert_output "OK" "$out" "sourced: pipefail not set in parent"
 
-  # Function exported to subshells
-  out=$(bash -c "source '$WHICH' && bash -c 'type which' 2>&1"); rc=$?
-  assert_exit 0 $rc "sourced: function exported"
-  assert_contains "function" "$out" "sourced: subshell sees function"
+  # Function NOT exported to subshells (avoids shadowing the system which in children).
+  # env -i isolates the check from any ambient BASH_FUNC_which a profile.d install exports.
+  out=$(env -i PATH="$PATH" bash --norc -c "source '$WHICH' && bash -c 'type -t which' 2>&1")
+  if [[ "$out" != "function" ]]; then ok "sourced: which not exported to child shells"; else not_ok "sourced: which exported to child shells (shadows system which)"; fi
+
+  # Help does not leak a global _which_help into the caller's namespace
+  out=$(env -i PATH="$PATH" bash --norc -c "source '$WHICH'; which ls >/dev/null 2>&1; type -t _which_help 2>/dev/null")
+  assert_empty "$out" "sourced: _which_help not leaked into namespace"
 
   # Return vs exit: error doesn't kill shell
   out=$(bash -c "source '$WHICH'; which nonexistent_xyz 2>/dev/null; echo ALIVE"); rc=$?

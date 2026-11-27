@@ -1,6 +1,6 @@
 # Symlink Utility
 
-![Version](https://img.shields.io/badge/Version-1.4.0-blue.svg)
+![Version](https://img.shields.io/badge/Version-1.5.1-blue.svg)
 ![License](https://img.shields.io/badge/License-GPL--3.0-green.svg)
 
 A Bash utility that creates symbolic links in `/usr/local/bin` for executables, making them accessible system-wide. Designed for managing scripts across multiple directories with built-in safety and batch processing.
@@ -96,6 +96,8 @@ symlink --debug -nSPd /path/to/scripts
 |--------|-------------|
 | `-S, --scan-symlink` | Scan for `.symlink` files and process them |
 | `-P, --no-prompt` | Skip confirmation prompts |
+| `-f, --force` | Replace pre-existing non-symlink files (non-interactive) |
+| `--backup` | Back up a replaced file to `NAME.bak~` before clobbering |
 | `-d, --delete-broken-symlinks` | Clean up broken symlinks in target directory |
 | `-t, --target-dir DIR` | Custom target directory (default: `/usr/local/bin`) |
 | `-l, --list` | List `.symlink` file contents only |
@@ -110,13 +112,13 @@ Options can be combined: `-SPd` for no-prompt scan with cleanup.
 
 ## Safety Features
 
-Protects 53 critical system binaries from accidental replacement, limits scan depth to 5 levels, applies 2s timeout during symlink path resolution, and auto-detects interactive mode for appropriate prompting.
+Hard-protects a list of critical system binaries (`bash`, `sudo`, `ssh`, `rm`, …) from accidental replacement and flags any link that would shadow another `PATH` command. Pre-existing non-symlink files are skipped unless `--force`. `.symlink` source paths and link names are kept inside the project tree (no `..`/absolute escape). Scan depth is limited to 5 levels, a 2s timeout guards path resolution, and interactive mode is auto-detected for appropriate prompting. The critical-file list is a best-effort convenience guard, not a security boundary.
 
 ## Environment Variables
 
 | Variable | Purpose |
 |----------|---------|
-| `SYMLINK_DEBUG=1` | Enable debug logging to `/tmp/symlink-trace-<user>-<pid>.log` |
+| `SYMLINK_DEBUG=1` | Enable debug logging to a `mktemp` file in `$TMPDIR` (default `/tmp`) |
 | `SYMLINK_FORCE_CRITICAL=1` | Bypass critical file protection (use with caution) |
 
 ## Exit Codes
@@ -125,8 +127,8 @@ Protects 53 critical system binaries from accidental replacement, limits scan de
 |------|---------|
 | 0 | Success |
 | 1 | General error |
-| 2 | Permission denied |
 | 3 | File not found |
+| 13 | Permission denied |
 | 22 | Invalid option |
 | 50 | No symlink files found |
 

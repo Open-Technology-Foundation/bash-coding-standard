@@ -2,10 +2,10 @@
 # Benchmark different approaches for squeezing consecutive spaces
 
 set -euo pipefail
+shopt -s inherit_errexit
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
-# Test directory
-TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$TEST_DIR/.." && pwd)"
+die() { (($# < 2)) || >&2 echo "${0##*/}: ✗ ${*:2}"; exit "${1:-0}"; }
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -17,7 +17,7 @@ NC='\033[0m'
 squeeze_while_loop() {
   local -- v="$1"
   v="${v//$'\t'/ }"
-  while [[ $v =~ "  " ]]; do
+  while [[ $v == *'  '* ]]; do
     v="${v//  / }"
   done
   echo -n "$v"
@@ -59,6 +59,7 @@ squeeze_set_f() {
 
   # Collapse interior spaces using word splitting
   set -f
+  #shellcheck disable=SC2086  # splitting $v is the approach under test; set -f disables globbing
   set -- $v
   local -- middle="$*"
   set +f
@@ -82,15 +83,16 @@ benchmark() {
   done
 
   end=$EPOCHREALTIME
-  local -- total_time=$(awk "BEGIN {print $end - $start}")
-  local -- avg_time=$(awk "BEGIN {print $total_time / $iterations}")
+  local -- total_time avg_time
+  total_time=$(awk "BEGIN {print $end - $start}") || die 1 "awk failed computing total time for ${name@Q}"
+  avg_time=$(awk "BEGIN {print $total_time / $iterations}") || die 1 "awk failed computing average for ${name@Q}"
 
   printf '%s%-20s%s: %d iterations, %.3fs total, %.6fs average\n' \
     "$CYAN" "$name" "$NC" "$iterations" "$total_time" "$avg_time"
 }
 
 # Verify correctness first
-echo -e "${YELLOW}Verifying correctness of all approaches...${NC}"
+>&2 echo -e "${YELLOW}Verifying correctness of all approaches...${NC}"
 echo ""
 
 test_cases=(
@@ -103,19 +105,19 @@ test_cases=(
 
 declare -i all_correct=1
 for test in "${test_cases[@]}"; do
-  result_loop=$(squeeze_while_loop "$test")
-  result_tr=$(squeeze_tr "$test")
-  result_set_f=$(squeeze_set_f "$test")
+  result_loop=$(squeeze_while_loop "$test") || die 1 "squeeze_while_loop failed on ${test@Q}"
+  result_tr=$(squeeze_tr "$test") || die 1 "squeeze_tr failed on ${test@Q}"
+  result_set_f=$(squeeze_set_f "$test") || die 1 "squeeze_set_f failed on ${test@Q}"
 
   if [[ "$result_loop" != "$result_tr" ]] || [[ "$result_loop" != "$result_set_f" ]]; then
-    echo -e "${YELLOW}Input:${NC} '$test'"
-    echo "  while_loop: '$result_loop'"
-    echo "  tr:         '$result_tr'"
-    echo "  set_f:      '$result_set_f'"
+    >&2 echo -e "${YELLOW}Input:${NC} '$test'"
+    >&2 echo "  while_loop: '$result_loop'"
+    >&2 echo "  tr:         '$result_tr'"
+    >&2 echo "  set_f:      '$result_set_f'"
     if [[ "$result_loop" != "$result_tr" ]] || [[ "$result_loop" != "$result_set_f" ]]; then
-      echo -e "  ${GREEN}Note: Differences may be expected for edge cases${NC}"
+      >&2 echo -e "  ${GREEN}Note: Differences may be expected for edge cases${NC}"
     fi
-    echo ""
+    >&2 echo ""
     all_correct=0
   fi
 done
@@ -123,12 +125,12 @@ done
 if ((all_correct)); then
   echo -e "${GREEN}✓ All approaches produce identical results${NC}"
 else
-  echo -e "${YELLOW}⚠ Some differences detected (see above)${NC}"
+  >&2 echo -e "${YELLOW}⚠ Some differences detected (see above)${NC}"
 fi
 echo ""
 
 # Benchmark different input patterns
-echo -e "${YELLOW}Benchmarking different input patterns...${NC}"
+>&2 echo -e "${YELLOW}Benchmarking different input patterns...${NC}"
 echo ""
 
 # Pattern 1: Short string with few spaces
@@ -179,7 +181,7 @@ benchmark "TR Command" "squeeze_tr" "$input6" 1000
 benchmark "Set -f" "squeeze_set_f" "$input6" 10000
 echo ""
 
-echo -e "${GREEN}Benchmark complete!${NC}"
+>&2 echo -e "${GREEN}Benchmark complete!${NC}"
 echo ""
 echo -e "${YELLOW}Summary:${NC}"
 echo "- While Loop: Pure Bash, good for typical cases (2-10 spaces)"

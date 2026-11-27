@@ -25,6 +25,7 @@ declare -fx is_approved_mac
 # --- Script mode only below ---
 set -euo pipefail
 shopt -s inherit_errexit
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
 declare -r SCRIPT_NAME=get-mac VERSION='1.0.0'
 
@@ -53,6 +54,8 @@ while (($#)); do
     *)            >&2 echo "$SCRIPT_NAME: unknown option: ${1@Q}"
                   >&2 show_help; exit 1 ;;
   esac
+  #shellcheck disable=SC2317  # BCS0801 loop shape: unreachable until a non-exiting option is added
+  shift
 done
 
 get_mac

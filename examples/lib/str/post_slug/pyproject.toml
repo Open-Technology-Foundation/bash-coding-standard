@@ -4,7 +4,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "post_slug"
-version = "1.0.1"
+version = "1.1.0"
 authors = [{name = "Gary Dean", email = "garydean@okusi.id"}]
 description = "Cross-language slug generator for URL-safe and filename-safe strings"
 readme = "README.md"

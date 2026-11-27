@@ -257,14 +257,14 @@ assert_executable() {
   return 0
 }
 
-# Assert that a string contains a substring
+# Assert that a string contains a substring (literal match — use assert_matches for regex)
 # Arguments: $1=string, $2=substring, $3=optional message
 assert_contains() {
   local -r string="${1}"
   local -r substring="${2}"
   local -r message="${3:-String does not contain expected substring}"
 
-  if [[ ! "${string}" =~ ${substring} ]]; then
+  if [[ "${string}" != *"${substring}"* ]]; then
     fail "${message}: '${string}' does not contain '${substring}'"
     return 1
   fi

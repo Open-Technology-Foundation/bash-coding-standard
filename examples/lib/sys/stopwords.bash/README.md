@@ -1,12 +1,12 @@
 # Stopwords Filter
 
-A fast, multilingual text processing utility that filters stopwords from input text. Supports 33 languages with efficient O(1) lookup using Bash associative arrays.
+A fast, multilingual text processing utility that filters stopwords from input text. Supports 32 languages with efficient O(1) lookup using Bash associative arrays.
 
 > **Note:** For documents > 2,000 words, consider the **[Python implementation](https://github.com/Open-Technology-Foundation/stopwords)** which offers superior performance on larger datasets. Both use the same NLTK stopwords data.
 
 ## Features
 
-- **Multilingual Support**: Filter stopwords in 33 different languages
+- **Multilingual Support**: Filter stopwords in 32 different languages
 - **Multiple Output Formats**: Single-line, list, or word frequency counts
 - **Flexible Input**: Accept text via command-line arguments or stdin
 - **Punctuation Control**: Optionally preserve or remove punctuation marks
@@ -18,37 +18,33 @@ A fast, multilingual text processing utility that filters stopwords from input t
 
 ### Quick Install
 
+One line, system-wide:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Open-Technology-Foundation/stopwords.bash/main/install.sh | sudo bash
+git clone --depth 1 https://github.com/Open-Technology-Foundation/stopwords.bash && sudo stopwords.bash/install.sh
 ```
 
-### Standard Install
-
-**System-wide** (recommended):
+Or for your user only, without sudo:
 ```bash
-git clone https://github.com/Open-Technology-Foundation/stopwords.bash
-cd stopwords.bash
-sudo ./install.sh install
+git clone --depth 1 https://github.com/Open-Technology-Foundation/stopwords.bash && PREFIX=$HOME/.local stopwords.bash/install.sh
 ```
 
-**User-local** (no sudo):
+This installs the script to `$PREFIX/bin/stopwords` and stopwords data to `$PREFIX/share/stopwords/` (32 languages, ~170KB). NLTK is not needed: the bundled data is always installed, and the script uses it first.
+
+Or skip installing altogether: run `stopwords.bash/stopwords` straight from the clone; it finds the bundled `stopwords_data/` beside itself.
+
+### Upgrade, Verify & Uninstall
+
+Keep the `stopwords.bash` directory; these commands run from the directory that contains it. For a user install, put `PREFIX=$HOME/.local` in front of each instead of `sudo`.
+
 ```bash
-PREFIX=$HOME/.local ./install.sh install
-```
+# Upgrade
+git -C stopwords.bash pull && sudo stopwords.bash/install.sh
 
-This installs the script to `$PREFIX/bin/stopwords` and stopwords data to `/usr/share/stopwords/` (33 languages, ~170KB). If Python NLTK stopwords are already installed, data installation is automatically skipped.
-
-### Verify & Uninstall
-
-```bash
 # Verify installation
-./install.sh check
+stopwords.bash/install.sh check
 
-# Uninstall (system)
-sudo ./install.sh uninstall
-
-# Uninstall (user)
-PREFIX=$HOME/.local ./install.sh uninstall
+# Uninstall
+sudo stopwords.bash/install.sh uninstall
 ```
 
 ## Usage
@@ -148,29 +144,33 @@ done
 ## Exit Codes
 
 - `0`: Success
-- `1`: Data directory or stopwords file not found
+- `1`: Internal failure (punctuation stripping)
 - `2`: Missing argument for option
+- `3`: Data directory or stopwords file not found
 - `22`: Invalid option
 
 ## Troubleshooting
 
 **Stopwords data not found?**
 
-The script searches these locations in order:
-1. `$NLTK_DATA/corpora/stopwords/` (custom NLTK path)
-2. `/usr/share/nltk_data/corpora/stopwords/` (system NLTK)
-3. `/usr/share/stopwords/` (bundled fallback)
+The script uses the first of these locations that exists. The bundled data comes first; NLTK data is optional, used only when no bundled data is found:
+1. `<prefix>/share/stopwords/`, where the script is installed as `<prefix>/bin/stopwords` (bundled data, as installed)
+2. `stopwords_data/` beside the script (a checkout)
+3. `/usr/local/share/stopwords/`
+4. `/usr/share/stopwords/` (installs before this layout)
+5. `$NLTK_DATA/corpora/stopwords/` (optional NLTK data)
+6. `/usr/share/nltk_data/corpora/stopwords/` (optional system NLTK data)
+
+Symlinks to the script are resolved first, so a link in another directory still finds the data.
 
 Solutions:
 ```bash
-# Install this package
+# Install this package, which includes the data
 sudo ./install.sh install
 
-# OR use Python NLTK
-pip install nltk && python -m nltk.downloader stopwords
-
-# OR set NLTK_DATA manually
-export NLTK_DATA=/path/to/your/nltk_data
+# OR point NLTK_DATA at existing NLTK data
+# (python -m nltk.downloader stopwords puts it in ~/nltk_data)
+export NLTK_DATA=$HOME/nltk_data
 ```
 
 **User-local install not in PATH?**

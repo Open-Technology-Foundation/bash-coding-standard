@@ -3,10 +3,14 @@
 set -euo pipefail
 shopt -s inherit_errexit shift_verbose extglob nullglob
 
+# The caller's PATH, for the "not in PATH" hint; the locked PATH below never
+# contains ~/.local/bin, so testing it would always warn.
+declare -r CALLER_PATH=${PATH:-}
+
 # Lock down PATH for security
 declare -rx PATH='/usr/local/bin:/usr/bin:/bin'
 
-declare -r VERSION='1.0.0'
+declare -r VERSION='1.5.0'
 declare -r SCRIPT_NAME=${0##*/}
 declare -- SCRIPT_DIR
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -144,7 +148,7 @@ do_install() {
   fi
 
   # Check PATH for user installs
-  if ((EUID != 0)) && [[ ":$PATH:" != *":$DEST_BIN:"* ]]; then
+  if ((EUID != 0)) && [[ ":$CALLER_PATH:" != *":$DEST_BIN:"* ]]; then
     warn "$DEST_BIN is not in PATH"
     msg "  Add to ~/.bashrc:  export PATH=\"\$PATH:$DEST_BIN\""
   fi

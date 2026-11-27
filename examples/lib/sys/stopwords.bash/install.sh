@@ -2,123 +2,130 @@
 # install.sh - Installation script for stopwords.bash
 set -euo pipefail
 shopt -s inherit_errexit shift_verbose extglob nullglob
+# The caller's PATH is kept only to report where they will find the installed
+# script; every command here runs under the system PATH (this script may sudo)
+declare -r USER_PATH=${PATH:-}
+declare -rx PATH=/usr/local/bin:/usr/bin:/bin
 
-# Script metadata
-readonly VERSION='1.0.0'
-readonly SCRIPT_NAME='install.sh'
-readonly PROJECT_NAME='stopwords'
-
-# Get script directory
-declare -- SCRIPT_DIR
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly SCRIPT_DIR
+# Script metadata (no messaging functions yet, so the failure message is inline)
+declare -r VERSION=1.2.0
+declare -r PROJECT_NAME=stopwords
+declare -- SCRIPT_PATH
+SCRIPT_PATH=$(realpath -- "$0") \
+  || { >&2 echo "${0##*/}: cannot resolve script path"; exit 1; }
+readonly SCRIPT_PATH
+declare -r SCRIPT_DIR=${SCRIPT_PATH%/*} SCRIPT_NAME=${SCRIPT_PATH##*/}
 
 # Installation configuration
 declare -- PREFIX="${PREFIX:-/usr/local}"
 declare -- BIN_DIR="$PREFIX/bin"
 declare -- DOC_DIR="$PREFIX/share/doc/$PROJECT_NAME"
-declare -- DATA_DIR="/usr/share/stopwords"
+declare -- DATA_DIR="$PREFIX/share/$PROJECT_NAME"
+readonly PREFIX BIN_DIR DOC_DIR DATA_DIR
+# Where earlier versions put the bundled data, whatever PREFIX was
+readonly LEGACY_DATA_DIR=/usr/share/stopwords
 
-# Source files
+# Fewest language files (README excluded) that count as a usable data set
+declare -ri MIN_DATA_FILES=30
+
 readonly SOURCE_SCRIPT="$SCRIPT_DIR/stopwords"
 readonly SOURCE_DATA="$SCRIPT_DIR/stopwords_data"
 readonly SOURCE_README="$SCRIPT_DIR/README.md"
 readonly SOURCE_LICENSE="$SCRIPT_DIR/LICENSE"
 
-# Color output (if terminal supports it)
-declare -i USE_COLOR=0
-if [[ -t 1 ]]; then
-  USE_COLOR=1
+# Colour only when both streams are terminals (BCS0105), so redirected
+# output never carries escape codes
+if [[ -t 1 && -t 2 ]]; then
+  declare -r RED=$'\033[1;31m' GREEN=$'\033[1;32m' YELLOW=$'\033[1;33m' BLUE=$'\033[1;34m' NC=$'\033[0m'
+else
+  declare -r RED='' GREEN='' YELLOW='' BLUE='' NC=''
 fi
 
-# Output functions
-msg() {
-  printf '%s\n' "$*"
+# Messaging: status text goes to stderr, keeping stdout for usage and
+# version output. _msg takes its icon and colour from the calling wrapper.
+# No script-name prefix: these lines read as a progress log, not as errors
+# from a tool in a pipeline
+_msg() {
+  local -- prefix=''
+  case ${FUNCNAME[1]} in
+    info)    prefix="$BLUE◉$NC " ;;
+    success) prefix="$GREEN✓$NC " ;;
+    warn)    prefix="$YELLOW▲$NC " ;;
+    error)   prefix="$RED✗$NC " ;;
+    msg|*)   ;;
+  esac
+  >&2 printf '%s%s\n' "$prefix" "$*"
 }
+msg()     { _msg "$@"; }
+info()    { _msg "$@"; }
+success() { _msg "$@"; }
+warn()    { _msg "$@"; }
+error()   { _msg "$@"; }
 
-info() {
-  if ((USE_COLOR)); then
-    printf '\033[1;34m◉\033[0m %s\n' "$*"
-  else
-    printf '◉ %s\n' "$*"
-  fi
-}
-
-success() {
-  if ((USE_COLOR)); then
-    printf '\033[1;32m✓\033[0m %s\n' "$*"
-  else
-    printf '✓ %s\n' "$*"
-  fi
-}
-
-warning() {
-  if ((USE_COLOR)); then
-    >&2 printf '\033[1;33m▲\033[0m %s\n' "$*"
-  else
-    >&2 printf '▲ %s\n' "$*"
-  fi
-}
-
-error() {
-  if ((USE_COLOR)); then
-    >&2 printf '\033[1;31m✗\033[0m %s\n' "$*"
-  else
-    >&2 printf '✗ %s\n' "$*"
-  fi
-}
-
-# Check if we need sudo
-needs_sudo() {
-  local -- test_dir=$1
-  [[ -w "$test_dir" ]] && return 1
-  return 0
-}
-
-# Execute command with sudo if needed
+# Execute command with sudo if target_dir is not writable; report a failure
+# with the command line
 run_install() {
   local -- target_dir=$1
   shift
+  local -i rc=0
 
-  if needs_sudo "$target_dir" 2>/dev/null || ! [[ -w "$target_dir" ]]; then
-    if [[ $EUID -ne 0 ]]; then
+  # A directory not yet created is writable when its nearest existing
+  # ancestor is, so a user-local PREFIX needs no sudo for new directories
+  while [[ ! -e $target_dir ]]; do
+    target_dir=${target_dir%/*}
+    target_dir=${target_dir:-/}
+  done
+
+  if [[ ! -w $target_dir ]]; then
+    if ((EUID)); then
       info "Requesting sudo privileges for installation to $target_dir"
-      sudo "$@"
+      sudo -- "$@" || rc=$?
     else
-      "$@"
+      "$@" || rc=$?
     fi
   else
-    "$@"
+    "$@" || rc=$?
   fi
+
+  ((rc == 0)) || error "Failed (exit $rc): ${*@Q}"
+  return "$rc"
 }
 
-# Detect if NLTK stopwords already installed
-detect_nltk_stopwords() {
-  local -a nltk_paths=(
-    "${NLTK_DATA:-}/corpora/stopwords"
-    "$HOME/nltk_data/corpora/stopwords"
-    "/usr/share/nltk_data/corpora/stopwords"
-    "/usr/local/share/nltk_data/corpora/stopwords"
-  )
-
-  local -- path
-  for path in "${nltk_paths[@]}"; do
-    [[ -z "$path" ]] && continue
-    if [[ -d "$path" ]]; then
-      local -i count
-      count=$(find "$path" -type f ! -name README 2>/dev/null | wc -l)
-      if ((count >= 30)); then
-        echo "$path"
-        return 0
-      fi
+# Print the first executable NAME on the caller's PATH, as `command -v` would
+find_in_user_path() {
+  local -- name=$1 dir
+  local -a dirs
+  IFS=: read -ra dirs <<< "$USER_PATH"
+  for dir in "${dirs[@]}"; do
+    # An empty element means the current directory; never report that
+    [[ -n $dir ]] || continue
+    if [[ -f $dir/$name && -x $dir/$name ]]; then
+      echo "$dir/$name"
+      return 0
     fi
   done
   return 1
 }
 
-# Show usage
+# Count the language files in a stopwords data directory (README excluded).
+# A relative path (from a relative NLTK_DATA) gets ./ so find cannot read a
+# leading '-' as an option
+count_data_files() {
+  local -- dir=$1
+  [[ $dir == /* ]] || dir=./$dir
+  find "$dir" -maxdepth 1 -type f ! -name README | wc -l
+}
+
+# Print the data directory the given stopwords script uses, by asking the
+# script itself, so check cannot disagree with it about the search order.
+# Sourcing only defines its functions; the script stops at its source fence
+script_data_dir() {
+  # shellcheck disable=SC2016  # $1 is for the child shell to expand
+  bash -c 'source -- "$1" && _stopwords_find_data' _ "$1" 2>/dev/null
+}
+
 usage() {
-  cat <<EOT
+  cat <<USAGE
 $SCRIPT_NAME $VERSION - Installation script for $PROJECT_NAME
 
 Usage: $SCRIPT_NAME [COMMAND] [OPTIONS]
@@ -129,9 +136,10 @@ Commands:
   check       Verify installation status
 
 Environment Variables:
-  PREFIX      Installation prefix (default: /usr/local)
+  PREFIX      Installation prefix, an absolute path (default: /usr/local)
               For user install: PREFIX=\$HOME/.local
-  NLTK_DATA   If set, the script will check this location first for stopwords
+  NLTK_DATA   Optional NLTK data directory, used only when no bundled
+              stopwords data is found
 
 Examples:
   # System-wide installation (requires sudo)
@@ -147,321 +155,252 @@ Examples:
   sudo ./install.sh uninstall
 
 Note:
-  - If Python NLTK with stopwords is installed, data installation will be skipped
-  - The script automatically detects and uses existing NLTK installations
+  - The bundled stopwords data is always installed, and the script uses it
+    first; NLTK data is optional
+  - uninstall asks before removing the data directory and reads the answer
+    from stdin; for unattended runs, pipe it in (echo y | ./install.sh
+    uninstall). No answer keeps the data
 
 Current Configuration:
   PREFIX:     $PREFIX
   BIN_DIR:    $BIN_DIR
   DOC_DIR:    $DOC_DIR
   DATA_DIR:   $DATA_DIR
-EOT
+USAGE
 }
 
-# Verify source files exist
 verify_sources() {
   local -i missing=0
 
-  if [[ ! -f "$SOURCE_SCRIPT" ]]; then
-    error "Source script not found: $SOURCE_SCRIPT"
-    ((missing+=1))
+  if [[ ! -f $SOURCE_SCRIPT ]]; then
+    error "Source script not found: ${SOURCE_SCRIPT@Q}"
+    missing+=1
   fi
 
-  if [[ ! -d "$SOURCE_DATA" ]]; then
-    error "Source data directory not found: $SOURCE_DATA"
-    ((missing+=1))
+  if [[ ! -d $SOURCE_DATA ]]; then
+    error "Source data directory not found: ${SOURCE_DATA@Q}"
+    missing+=1
   fi
 
-  if [[ ! -f "$SOURCE_README" ]]; then
-    warning "README.md not found (optional)"
+  if [[ ! -f $SOURCE_README ]]; then
+    warn 'README.md not found (optional)'
   fi
 
-  if [[ ! -f "$SOURCE_LICENSE" ]]; then
-    warning "LICENSE not found (optional)"
+  if [[ ! -f $SOURCE_LICENSE ]]; then
+    warn 'LICENSE not found (optional)'
   fi
 
   if ((missing)); then
-    error "Missing required source files. Cannot proceed with installation."
-    return 1
+    error 'Missing required source files. Cannot proceed with installation.'
+    return 3
   fi
 
   return 0
 }
 
-# Install command
-cmd_install() {
-  info "Installing $PROJECT_NAME $VERSION"
-  info "Installation prefix: $PREFIX"
-  info "Stopwords data directory: $DATA_DIR"
-  msg ""
-
-  # Verify sources
-  verify_sources || return 1
-
-  # Check for existing NLTK installation
-  local -- existing_nltk
-  if existing_nltk=$(detect_nltk_stopwords); then
-    info "Found existing NLTK stopwords: $existing_nltk"
-    success "Skipping data installation - will use existing NLTK data"
-    msg ""
-
-    # Install only script and docs, skip data
-    info "Installing script only..."
-
-    # Create bin directory if needed
-    if [[ ! -d "$BIN_DIR" ]]; then
-      run_install "$(dirname "$BIN_DIR")" mkdir -p "$BIN_DIR"
-    fi
-
-    run_install "$BIN_DIR" install -m 755 "$SOURCE_SCRIPT" "$BIN_DIR/$PROJECT_NAME"
-    success "Script installed to $BIN_DIR/$PROJECT_NAME"
-
-    # Install documentation
-    if [[ -f "$SOURCE_README" ]]; then
-      if [[ ! -d "$DOC_DIR" ]]; then
-        run_install "$(dirname "$DOC_DIR")" mkdir -p "$DOC_DIR"
-      fi
-      run_install "$DOC_DIR" cp "$SOURCE_README" "$DOC_DIR/"
-      [[ -f "$SOURCE_LICENSE" ]] && run_install "$DOC_DIR" cp "$SOURCE_LICENSE" "$DOC_DIR/"
-      success "Documentation installed to $DOC_DIR"
-    fi
-
-    msg ""
-    success "Installation complete (using existing NLTK data at $existing_nltk)"
-    msg ""
-
-    # Quick verification
-    info "Verifying installation..."
-    cmd_check
-    return $?
-  fi
-
-  info "NLTK stopwords not found - installing bundled data"
-  msg ""
-
-  # Create directories
-  info "Creating installation directories..."
-
-  if [[ ! -d "$BIN_DIR" ]]; then
-    run_install "$(dirname "$BIN_DIR")" mkdir -p "$BIN_DIR"
-  fi
-
-  if [[ ! -d "$DOC_DIR" ]]; then
-    run_install "$(dirname "$DOC_DIR")" mkdir -p "$DOC_DIR"
-  fi
-
-  if [[ ! -d "$DATA_DIR" ]]; then
-    run_install "$(dirname "$DATA_DIR")" mkdir -p "$DATA_DIR"
-  fi
-
-  # Install script
-  info "Installing script to $BIN_DIR/$PROJECT_NAME..."
-  run_install "$BIN_DIR" install -m 755 "$SOURCE_SCRIPT" "$BIN_DIR/$PROJECT_NAME"
-  success "Script installed"
-
-  # Install data files
-  info "Installing stopwords data (33 languages, ~170KB)..."
-  local -- file
-  local -i count=0
-  for file in "$SOURCE_DATA"/*; do
-    [[ -f "$file" ]] || continue
-    run_install "$DATA_DIR" cp "$file" "$DATA_DIR/"
-    ((count+=1))
-  done
-  success "Installed $count data files to $DATA_DIR"
-
-  # Install documentation
-  if [[ -f "$SOURCE_README" ]]; then
-    info "Installing documentation..."
-    run_install "$DOC_DIR" cp "$SOURCE_README" "$DOC_DIR/"
-    [[ -f "$SOURCE_LICENSE" ]] && run_install "$DOC_DIR" cp "$SOURCE_LICENSE" "$DOC_DIR/"
-    success "Documentation installed to $DOC_DIR"
-  fi
-
-  msg ""
-  success "Installation complete!"
-  msg ""
-
-  # Check if installed location is in PATH
-  if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-    warning "Note: $BIN_DIR is not in your PATH"
-    msg "    Add this to your ~/.bashrc or ~/.profile:"
-    msg "    export PATH=\"$BIN_DIR:\$PATH\""
-    msg ""
-  fi
-
-  # Check NLTK_DATA environment
-  if [[ "$DATA_DIR" != "/usr/share/stopwords" ]] || [[ -v NLTK_DATA ]]; then
-    info "NLTK_DATA configuration:"
-    if [[ -v NLTK_DATA ]]; then
-      msg "  Current: \$NLTK_DATA=$NLTK_DATA"
-    fi
-    msg "  Installed to: $DATA_DIR"
-    if [[ ! -v NLTK_DATA ]] && [[ "$DATA_DIR" != "/usr/share/stopwords" ]]; then
-      warning "You may need to set NLTK_DATA environment variable:"
-      msg "    export NLTK_DATA=$DATA_DIR"
-    fi
-    msg ""
-  fi
-
-  # Quick verification
-  info "Verifying installation..."
-  if cmd_check; then
-    success "All checks passed!"
-  else
-    warning "Some verification checks failed. Please review the output above."
-  fi
-
-  return 0
-}
-
-# Uninstall command
-cmd_uninstall() {
-  info "Uninstalling $PROJECT_NAME"
-  msg ""
-
-  local -i removed=0
-
-  # Remove script
-  if [[ -f "$BIN_DIR/$PROJECT_NAME" ]]; then
-    info "Removing script from $BIN_DIR..."
-    run_install "$BIN_DIR" rm -f "$BIN_DIR/$PROJECT_NAME"
-    success "Script removed"
-    ((removed+=1))
-  else
-    info "Script not found at $BIN_DIR/$PROJECT_NAME (already removed)"
-  fi
-
-  # Remove documentation
-  if [[ -d "$DOC_DIR" ]]; then
-    info "Removing documentation from $DOC_DIR..."
-    run_install "$(dirname "$DOC_DIR")" rm -rf "$DOC_DIR"
-    success "Documentation removed"
-    ((removed+=1))
-  else
-    info "Documentation not found (already removed)"
-  fi
-
-  # Ask about data removal
-  if [[ -d "$DATA_DIR" ]]; then
-    msg ""
-    warning "Stopwords data found at: $DATA_DIR"
-    msg "    Remove data directory? [y/N] "
-    local -- response
-    read -r response
-    if [[ "$response" =~ ^[Yy] ]]; then
-      info "Removing stopwords data..."
-      run_install "$(dirname "$DATA_DIR")" rm -rf "$DATA_DIR"
-      success "Data removed"
-      ((removed+=1))
-    else
-      info "Data directory preserved"
-    fi
-  else
-    info "Data directory not found (already removed)"
-  fi
-
-  msg ""
-  if ((removed)); then
-    success "Uninstallation complete"
-  else
-    info "Nothing to uninstall (already clean)"
-  fi
-
-  return 0
-}
-
-# Check command
 cmd_check() {
   local -i errors=0
 
   info "Checking $PROJECT_NAME installation..."
-  msg ""
+  msg ''
 
-  # Check script installation
-  if [[ -x "$BIN_DIR/$PROJECT_NAME" ]]; then
-    success "Script found: $BIN_DIR/$PROJECT_NAME"
+  local -- installed="$BIN_DIR/$PROJECT_NAME"
+  if [[ -x $installed ]]; then
+    success "Script found: $installed"
   else
-    error "Script not found or not executable: $BIN_DIR/$PROJECT_NAME"
-    ((errors+=1))
+    error "Script not found or not executable: ${installed@Q}"
+    errors+=1
   fi
 
-  # Check if in PATH
-  if command -v "$PROJECT_NAME" >/dev/null 2>&1; then
-    local -- found_path
-    found_path=$(command -v "$PROJECT_NAME")
+  # The copy the caller will actually run, found on their own PATH
+  local -- found_path=''
+  if found_path=$(find_in_user_path "$PROJECT_NAME"); then
     success "Script in PATH: $found_path"
   else
-    warning "Script not found in PATH"
-    if [[ -x "$BIN_DIR/$PROJECT_NAME" ]]; then
+    warn 'Script not found in PATH'
+    if [[ -x $installed ]]; then
       msg "    Script exists but $BIN_DIR not in PATH"
     fi
   fi
 
-  # Check data directory
-  if [[ -d "$DATA_DIR" ]]; then
-    local -i file_count
-    file_count=$(find "$DATA_DIR" -type f ! -name README | wc -l)
-    if ((file_count >= 33)); then
-      success "Data directory found: $DATA_DIR ($file_count files)"
-    else
-      error "Data directory incomplete: $DATA_DIR (expected 33+ files, found $file_count)"
-      ((errors+=1))
-    fi
+  # The data directory the installed script uses, as the script reports it
+  local -- data_dir
+  local -i file_count=0
+  if [[ ! -x $installed ]]; then
+    info 'Data check skipped: no installed script to ask'
+  elif ! data_dir=$(script_data_dir "$installed"); then
+    error "Stopwords data not found by ${installed@Q}"
+    errors+=1
+  elif ! file_count=$(count_data_files "$data_dir"); then
+    error "Cannot read data directory: ${data_dir@Q}"
+    errors+=1
+  elif ((file_count >= MIN_DATA_FILES)); then
+    success "Stopwords data in use: $data_dir ($file_count files)"
   else
-    error "Data directory not found: $DATA_DIR"
-    ((errors+=1))
+    error "Data directory incomplete: ${data_dir@Q} (expected $MIN_DATA_FILES+ files, found $file_count)"
+    errors+=1
   fi
 
-  # Check NLTK_DATA environment
-  if [[ -v NLTK_DATA ]]; then
-    if [[ "$NLTK_DATA" == "$DATA_DIR" ]]; then
-      success "NLTK_DATA correctly set: $NLTK_DATA"
+  if [[ -n $found_path ]]; then
+    info 'Testing basic functionality...'
+    if "$found_path" 'the quick brown fox' &>/dev/null; then
+      success 'Basic test passed'
     else
-      warning "NLTK_DATA mismatch: \$NLTK_DATA=$NLTK_DATA but data at $DATA_DIR"
-    fi
-  else
-    if [[ "$DATA_DIR" == "/usr/share/stopwords" ]]; then
-      info "NLTK_DATA not set (using default: /usr/share/stopwords)"
-    else
-      warning "NLTK_DATA not set (data installed to: $DATA_DIR)"
-      msg "    Consider: export NLTK_DATA=$DATA_DIR"
+      error 'Basic test failed'
+      errors+=1
     fi
   fi
 
-  # Test functionality
-  if command -v "$PROJECT_NAME" >/dev/null 2>&1; then
-    info "Testing basic functionality..."
-    if "$PROJECT_NAME" 'the quick brown fox' >/dev/null 2>&1; then
-      success "Basic test passed"
-    else
-      error "Basic test failed"
-      ((errors+=1))
-    fi
-  fi
-
-  # Check documentation
-  if [[ -d "$DOC_DIR" ]]; then
+  if [[ -d $DOC_DIR ]]; then
     success "Documentation found: $DOC_DIR"
   else
-    info "Documentation not installed"
+    info 'Documentation not installed'
   fi
 
-  msg ""
+  msg ''
   if ((errors)); then
     error "Found $errors error(s)"
     return 1
   else
-    success "All checks passed"
+    success 'All checks passed'
     return 0
   fi
 }
 
-# Main
+cmd_install() {
+  info "Installing $PROJECT_NAME $VERSION"
+  info "Installation prefix: $PREFIX"
+  info "Stopwords data directory: $DATA_DIR"
+  msg ''
+
+  verify_sources || return
+
+  info 'Creating installation directories...'
+
+  if [[ ! -d $BIN_DIR ]]; then
+    run_install "${BIN_DIR%/*}" mkdir -p -- "$BIN_DIR" || return 1
+  fi
+
+  if [[ ! -d $DOC_DIR ]]; then
+    run_install "${DOC_DIR%/*}" mkdir -p -- "$DOC_DIR" || return 1
+  fi
+
+  if [[ ! -d $DATA_DIR ]]; then
+    run_install "${DATA_DIR%/*}" mkdir -p -- "$DATA_DIR" || return 1
+  fi
+
+  info "Installing script to $BIN_DIR/$PROJECT_NAME..."
+  run_install "$BIN_DIR" install -m 755 -- "$SOURCE_SCRIPT" "$BIN_DIR/$PROJECT_NAME" || return 1
+  success 'Script installed'
+
+  info 'Installing stopwords data (32 languages, ~170KB)...'
+  local -- file
+  local -i count=0
+  for file in "$SOURCE_DATA"/*; do
+    [[ -f $file ]] || continue
+    run_install "$DATA_DIR" cp -- "$file" "$DATA_DIR/" || return 1
+    count+=1
+  done
+  success "Installed $count data files to $DATA_DIR"
+
+  if [[ -f $SOURCE_README ]]; then
+    info 'Installing documentation...'
+    run_install "$DOC_DIR" cp -- "$SOURCE_README" "$DOC_DIR/" || return 1
+    if [[ -f $SOURCE_LICENSE ]]; then
+      run_install "$DOC_DIR" cp -- "$SOURCE_LICENSE" "$DOC_DIR/" || return 1
+    fi
+    success "Documentation installed to $DOC_DIR"
+  fi
+
+  msg ''
+  success 'Installation complete!'
+  msg ''
+
+  if [[ ":$USER_PATH:" != *":$BIN_DIR:"* ]]; then
+    warn "Note: $BIN_DIR is not in your PATH"
+    msg '    Add this to your ~/.bashrc or ~/.profile:'
+    msg "    export PATH=\"$BIN_DIR:\$PATH\""
+    msg ''
+  fi
+
+  # cmd_check also reports which data directory the script will use
+  info 'Verifying installation...'
+  if cmd_check; then
+    success 'All checks passed!'
+  else
+    warn 'Some verification checks failed. Please review the output above.'
+  fi
+
+  return 0
+}
+
+cmd_uninstall() {
+  info "Uninstalling $PROJECT_NAME"
+  msg ''
+
+  local -i removed=0
+
+  if [[ -f $BIN_DIR/$PROJECT_NAME ]]; then
+    info "Removing script from $BIN_DIR..."
+    run_install "$BIN_DIR" rm -f -- "$BIN_DIR/$PROJECT_NAME" || return 1
+    success 'Script removed'
+    removed+=1
+  else
+    info "Script not found at $BIN_DIR/$PROJECT_NAME (already removed)"
+  fi
+
+  if [[ -d $DOC_DIR ]]; then
+    info "Removing documentation from $DOC_DIR..."
+    run_install "${DOC_DIR%/*}" rm -rf -- "$DOC_DIR" || return 1
+    success 'Documentation removed'
+    removed+=1
+  else
+    info 'Documentation not found (already removed)'
+  fi
+
+  if [[ -d $DATA_DIR ]]; then
+    msg ''
+    warn "Stopwords data found at: $DATA_DIR"
+    msg '    Remove data directory? [y/N] '
+    local -- response
+    # No answer (EOF on stdin) means no, rather than aborting under set -e
+    read -r response || response=''
+    if [[ $response =~ ^[Yy] ]]; then
+      info 'Removing stopwords data...'
+      run_install "${DATA_DIR%/*}" rm -rf -- "$DATA_DIR" || return 1
+      success 'Data removed'
+      removed+=1
+    else
+      info 'Data directory preserved'
+    fi
+  else
+    info 'Data directory not found (already removed)'
+  fi
+
+  # Earlier versions installed the data here regardless of PREFIX; point it
+  # out rather than delete a system directory this run did not create
+  if [[ $LEGACY_DATA_DIR != "$DATA_DIR" && -d $LEGACY_DATA_DIR ]]; then
+    info "Data from an earlier install remains at $LEGACY_DATA_DIR"
+    msg "    Remove it with: sudo rm -rf -- $LEGACY_DATA_DIR"
+  fi
+
+  msg ''
+  if ((removed)); then
+    success 'Uninstallation complete'
+  else
+    info 'Nothing to uninstall (already clean)'
+  fi
+
+  return 0
+}
+
 main() {
   local -- command="${1:-install}"
 
-  case "$command" in
+  # PREFIX comes from the environment and ends up in mkdir/cp/rm operands
+  [[ $PREFIX == /* ]] || { error "PREFIX must be an absolute path: ${PREFIX@Q}"; return 22; }
+
+  case $command in
     install)
       cmd_install
       ;;
@@ -480,10 +419,10 @@ main() {
       return 0
       ;;
     *)
-      error "Unknown command: $command"
-      msg ""
-      usage
-      return 1
+      error "Unknown command: ${command@Q}"
+      msg ''
+      >&2 usage
+      return 22
       ;;
   esac
 }

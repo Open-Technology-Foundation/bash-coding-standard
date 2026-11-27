@@ -1,7 +1,7 @@
 .\" Symlink Manual Page
 .\" Generated: 2026-03-08
 .\"
-.TH SYMLINK 1 "March 2026" "symlink 1.4.0" "User Commands"
+.TH SYMLINK 1 "November 2026" "symlink 1.5.1" "User Commands"
 .\"
 .SH NAME
 symlink \- create symlinks in /usr/local/bin for executables
@@ -77,7 +77,18 @@ Remove broken symlinks in the target directory after processing.
 .TP
 .BR \-P ", " \-\-no\-prompt
 Skip all confirmation prompts. Useful for scripted or non-interactive
-operation.
+operation. A pre-existing target that is a regular file (not a symlink)
+is skipped rather than overwritten unless
+.B \-\-force
+is also given.
+.TP
+.BR \-f ", " \-\-force
+Replace a pre-existing regular (non-symlink) target file in
+non-interactive mode. Without this flag such files are left untouched.
+.TP
+.B \-\-backup
+Before replacing an existing file, rename it to
+.IR NAME.bak~ .
 .TP
 .BR \-n ", " \-\-dry\-run
 Preview changes without making them. Shows what would be created,
@@ -91,8 +102,10 @@ Suppress verbose output (opposite of
 .BR \-v ).
 .TP
 .BR \-D ", " \-\-debug
-Enable debug mode with detailed trace logging to
-.IR /tmp/symlink\-trace\-<user>\-<pid>.log .
+Enable debug mode with detailed trace logging to a file created via
+.BR mktemp (1)
+in
+.IR $TMPDIR " (default " /tmp ).
 Can also be enabled via the
 .B SYMLINK_DEBUG
 environment variable.
@@ -169,12 +182,33 @@ includes multiple safety mechanisms to prevent accidental damage to
 the system:
 .TP
 .B Critical File Protection
-53 critical system binaries (including
-.BR bash ", " sudo ", " ls ", " rm ", " cp ", " mv ", " grep ", " sed )
-are protected from accidental replacement. In non-interactive mode,
-attempts to overwrite these files are silently skipped unless
+A list of hard\-protected system binaries (including
+.BR bash ", " sudo ", " ssh ", " ls ", " rm ", " systemctl )
+is guarded from accidental replacement. In non-interactive mode,
+attempts to overwrite these names are skipped unless
 .B SYMLINK_FORCE_CRITICAL
 is set. In interactive mode, an explicit confirmation is required.
+This is a best\-effort convenience guard, not a security boundary.
+.TP
+.B PATH\-Shadow Advisory
+Any other link whose name would override an executable found elsewhere
+on
+.B PATH
+is flagged. The link is still created in non-interactive mode (overriding
+via the target directory is normal usage); interactive mode prompts first.
+.TP
+.B Existing File Preservation
+A pre-existing target that is a regular file (not a symlink) is skipped
+in non-interactive mode unless
+.B \-\-force
+is given, so admin\-installed files are not silently destroyed.
+.TP
+.B Untrusted Input Containment
+.I .symlink
+source paths that are absolute or escape the file's directory (via
+.IR .. ),
+and link names that are not a single bare filename, are rejected \(em
+preventing a hostile tree from publishing links outside the target dir.
 .TP
 .B Scan Depth Limiting
 Directory scanning is limited to 5 levels deep
@@ -205,11 +239,11 @@ Success.
 .B 1
 General error.
 .TP
-.B 2
-Permission denied.
-.TP
 .B 3
 File not found.
+.TP
+.B 13
+Permission denied (EACCES).
 .TP
 .B 22
 Invalid option (EINVAL).
@@ -224,8 +258,10 @@ Set to
 .B 1
 to enable debug mode. Equivalent to the
 .B \-D
-option. Writes trace output to
-.IR /tmp/symlink\-trace\-<user>\-<pid>.log .
+option. Writes trace output to a
+.BR mktemp (1)
+file in
+.IR $TMPDIR " (default " /tmp ).
 .TP
 .B SYMLINK_FORCE_CRITICAL
 Set to
@@ -248,8 +284,10 @@ Configuration files defining executables to link. Searched recursively
 during scan mode
 .RB ( \-S ).
 .TP
-.I /tmp/symlink\-trace\-<user>\-<pid>.log
-Debug trace log created when debug mode is enabled.
+.IR $TMPDIR /symlink\-trace\-*.log
+Debug trace log (created via
+.BR mktemp (1))
+when debug mode is enabled.
 .TP
 .I /usr/local/share/man/man1/symlink.1
 This manual page.

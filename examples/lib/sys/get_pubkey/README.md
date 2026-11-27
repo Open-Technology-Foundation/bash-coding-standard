@@ -14,11 +14,11 @@ sudo get-pubkey netadmin    # another user (requires read access to their ~/.ssh
 get-pubkey | ssh-keygen -lf -   # show fingerprint
 ```
 
-Exit codes: `0` key found, `1` no key found, `2` user not found.
+Exit codes: `0` key found, `1` no key found, `2` user not found, `22` invalid option or too many arguments.
 
 ### is-authorized-pubkey
 
-Check whether a public key exists in an `authorized_keys` file. Matches on the key blob (type + base64), ignoring comments. Accepts an optional `mac|pubkey` prefix which is stripped before matching.
+Check whether a public key exists in an `authorized_keys` file. Matches the key type and base64 key data exactly, ignoring comments, options prefixes and commented-out lines. Malformed input (unknown key type, truncated or empty key data) is rejected. Accepts an optional `mac|pubkey` prefix which is stripped before matching.
 
 ```bash
 is-authorized-pubkey "$(get-pubkey)"
@@ -27,7 +27,7 @@ is-authorized-pubkey "$(get-pubkey)"
 AUTHORIZED_KEYS_FILE=/root/.ssh/authorized_keys sudo is-authorized-pubkey "$(get-pubkey)"
 ```
 
-Exit codes: `0` key found, `1` key not found or file unreadable.
+Exit codes: `0` key found, `1` key not found or file unreadable, `22` invalid option, missing or malformed PUBKEY.
 
 **Environment:** `AUTHORIZED_KEYS_FILE` — path to authorized_keys (default: `~/.ssh/authorized_keys`).
 

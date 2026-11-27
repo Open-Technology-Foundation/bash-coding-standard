@@ -1,6 +1,6 @@
-% SHLOCK(1) shlock 2.0.1
+% SHLOCK(1) shlock 2.0.2
 % Gary Dean (Biksu Okusi)
-% April 2026
+% November 2026
 
 # NAME
 
@@ -57,10 +57,13 @@ The lock is held using kernel-level **flock**(1) on a lock file, ensuring atomic
     Works independently; does not require **--wait**.
 
 **-s**, **--steal**
-:   Forcefully remove an existing lock. If the lock holder process is dead,
-    the lock is removed automatically without prompting. If the holder is still
-    running, displays a warning and prompts for confirmation before stealing.
-    Exits with code 1 if the user declines.
+:   Forcefully remove an existing lock. If no process holds the lock (its holder
+    died), the lock is removed automatically without prompting. If the holder is
+    alive (its recorded PID is running, or the lock is held even though the PID
+    file is missing, unreadable or stale), displays a warning and prompts for
+    confirmation before stealing. Exits with code 1 if the user declines.
+    Without a terminal the prompt reads end-of-file and declines, so a held
+    lock is never stolen unattended.
 
 **-h**, **--help**
 :   Display help message and exit.
@@ -87,7 +90,7 @@ Exit codes follow the Bash Coding Standard (BCS) canonical table. **v2.0.0 is a 
 :   I/O error: failed to write PID file after acquiring the lock. The lock is released on exit (fd 200 closes); any partial state is cleaned up by the EXIT trap.
 
 **13**
-:   Permission denied (no writable lock directory in `/run/lock`, `/var/lock`, or `/tmp/locks`).
+:   Permission denied: no writable lock directory in `/run/lock`, `/var/lock`, or `/tmp/locks`, or the lock file cannot be opened (e.g. another user's lock file).
 
 **22**
 :   Invalid argument (unknown option, bad *LOCKNAME*, non-numeric `-m`/`-t` value).
@@ -234,7 +237,7 @@ Combine steal with short option bundling:
 shlock -st 30 backup -- /usr/local/bin/backup.sh
 ```
 
-If the lock holder is dead, the lock is removed automatically. If the holder is still running, **shlock** displays a warning and prompts for confirmation.
+If no process holds the lock, it is removed automatically. If the holder is alive (by its recorded PID or, when the PID file is missing or stale, by a **flock** probe), **shlock** displays a warning and prompts for confirmation.
 
 ## Error Handling in Scripts
 
@@ -249,7 +252,7 @@ if ! shlock myapp -- /path/to/command; then
     1)  echo "Already running, skipping..." >&2; exit 0 ;;
     2)  echo "Usage error" >&2; exit 2 ;;
     5)  echo "I/O error writing PID file" >&2; exit 5 ;;
-    13) echo "No writable lock directory" >&2; exit 13 ;;
+    13) echo "Lock directory or lock file not writable" >&2; exit 13 ;;
     22) echo "Invalid argument" >&2; exit 22 ;;
     24) echo "Timeout waiting for lock" >&2; exit 24 ;;
     *)  rc=$?; echo "Command failed with exit code $rc" >&2; exit "$rc" ;;
@@ -279,12 +282,12 @@ exit 1
 
 1. **Argument parsing**: Resolves *LOCKNAME* from arguments or derives from *COMMAND* basename
 2. **Lock directory determination**: Selects first writable directory from `/run/lock`, `/var/lock`, `/tmp/locks`
-3. **Stale lock check**: Validates lock age and process liveness, removes stale locks
-4. **Lock stealing** (if **--steal**): Removes existing lock, prompting only if holder is still running
+3. **Lock stealing** (if **--steal**): Removes existing lock, prompting only if the holder is alive
+4. **Stale lock check**: Validates lock age and holder liveness, removes stale locks no process holds
 5. **Lock acquisition**: Opens file descriptor 200 on `<LOCK_DIR>/<LOCKNAME>.lock` and attempts **flock**(1)
 6. **PID tracking**: Writes current process ID to `<LOCK_DIR>/<LOCKNAME>.pid`
 7. **Command execution**: Runs *COMMAND* while holding lock, captures exit code
-8. **Cleanup**: EXIT trap removes PID file, **flock** releases when fd closes
+8. **Cleanup**: EXIT trap removes the PID file if it records this process, **flock** releases when fd closes
 
 ## File Descriptor 200
 
@@ -304,21 +307,24 @@ Lock files at `<LOCK_DIR>/<LOCKNAME>.lock` are NOT deleted after use. They persi
 - Reduces filesystem operations
 - Enables atomic lock semantics
 
-The PID file (`<LOCK_DIR>/<LOCKNAME>.pid`) is temporary and removed by the EXIT trap when the process terminates.
+The PID file (`<LOCK_DIR>/<LOCKNAME>.pid`) is temporary and removed by the EXIT trap of the process that wrote it. A contender that fails to acquire the lock leaves the holder's PID file alone, so stale-lock and **--steal** checks can still see a live holder.
 
 ## Stale Lock Detection Algorithm
 
-Before attempting to acquire the lock, **shlock** examines the existing lock file and applies one of two cleanup paths:
+Before attempting to acquire the lock, **shlock** examines the existing lock file and applies one of two cleanup paths. The holder counts as alive if the recorded PID is running (`kill -0 <PID>` succeeds) or if a non-blocking **flock** probe finds the lock held. The PID file can be missing, unreadable or stale while its holder still runs, so no lock file is removed on its word alone. The probe opens the file read-only, leaving its mtime unchanged, and treats a file it cannot open as held.
 
 1. Check if lock file exists; read modification time (mtime).
 2. Read PID from `<LOCK_DIR>/<LOCKNAME>.pid` (validated as positive integer).
 3. **Age-based path** — if age > **--max-age** (converted to seconds):
-    - If process is dead (`kill -0 <PID>` fails): remove both **.lock** and **.pid** files.
-    - If process is alive: exit with code 1 (lock held by long-running process).
-4. **Holder-based path** — if age ≤ **--max-age** but the holder PID is no longer running:
+    - If the holder is dead: remove both **.lock** and **.pid** files.
+    - If the holder is alive: exit with code 1 (lock held by long-running process).
+4. **Holder-based path** — if age ≤ **--max-age**, the holder PID is no longer running and the lock is not held:
     - Remove both **.lock** and **.pid** files, log a warning, and proceed.
+    - If the lock is held after all (stale PID file), nothing is removed: acquisition reports the lock as held, or waits for it.
 
 This ensures crashed processes don't block future executions (regardless of crash age), while still respecting legitimately long-running processes that exceed **--max-age**.
+
+The lock is held through file descriptor 200, which *COMMAND* inherits, as with **flock**(1). If **shlock** itself is killed (SIGKILL) while *COMMAND* keeps running, or *COMMAND* leaves a background process holding the descriptor, the lock stays held until those processes exit: later runs report it as held, past **--max-age** too, rather than starting alongside them. Close fd 200 (`200>&-`) in background processes that should not keep the lock.
 
 ## Waiting Modes
 
@@ -417,7 +423,7 @@ deploy:
     The location of `<LOCK_DIR>` is automatically determined (see Lock Directory Selection below).
 
 `<LOCK_DIR>/<LOCKNAME>.pid`
-:   PID file containing process ID of lock holder. Removed by EXIT trap.
+:   PID file containing process ID of lock holder. Removed by the holder's EXIT trap.
     Used for informational error messages and stale lock validation.
 
 ## Lock Directory Selection
@@ -445,7 +451,7 @@ If none of these directories are writable, **shlock** exits with code 13 (permis
 - Lock directories on tmpfs are cleared on reboot, automatically removing all locks.
 - Locks are automatically released when the process terminates (normal exit, signal, or crash).
 - For very long-running commands, consider adjusting **--max-age** to prevent premature stale lock detection.
-- PID reuse is possible but extremely rare; stale lock detection validates process identity.
+- PID reuse is possible but rare. It can only make a dead holder look alive, so **shlock** refuses or prompts instead of removing the lock; a live holder never looks dead, because the **flock** probe overrides the PID file.
 
 # BUGS
 
